@@ -1,0 +1,900 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "queryString": "Rubric",
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "={{ $json.id }}",
+            "mode": "id"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "d00cee93-3da3-4f03-80ea-22e91cb275ea",
+      "name": "Rubric",
+      "executeOnce": false,
+      "alwaysOutputData": false,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "V3JU4q50eACpIIMN",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "fileName": "={{ $json.name }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        288,
+        0
+      ],
+      "id": "2c1078c3-bf26-46c2-a2c4-445c3505c859",
+      "name": "Download file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "V3JU4q50eACpIIMN",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        496,
+        0
+      ],
+      "id": "871e29ec-2757-4087-8c34-8b053bfec034",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        496,
+        224
+      ],
+      "id": "a4f0a60e-72d7-4eb1-a655-9fa1efe045bc",
+      "name": "Extract from File1"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "fileName": "={{ $json.name }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        240,
+        224
+      ],
+      "id": "eed30695-a2fd-44d3-955d-6979e77b773a",
+      "name": "Download file1",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "V3JU4q50eACpIIMN",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "queryString": "Student",
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "={{ $json.id }}",
+            "mode": "id"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        0,
+        224
+      ],
+      "id": "620dfdfc-1aa5-47cf-8830-0574e4de04a8",
+      "name": "Submission",
+      "executeOnce": false,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "V3JU4q50eACpIIMN",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6dfbcb43-eb1c-46b1-9c1b-38e713bd685f",
+              "name": "student_text",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "f920952e-f1df-44f3-90ec-d2ddded0d352",
+              "name": "student_file",
+              "value": "={{ $json.info.Title || $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "39bafc3b-f7b5-4422-89ef-ba995e84bf8b",
+              "name": "student_id",
+              "value": "={{ ($json.info.Title || '').split('_').pop() }}\n",
+              "type": "string"
+            },
+            {
+              "id": "5de2dfff-7422-4cfc-88f6-37f9a9d47832",
+              "name": "assignment_name",
+              "value": "={{ $('Set_Assignment_Context').item.json.assignment_name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        704,
+        224
+      ],
+      "id": "6cacd919-33b4-4b9b-8997-98a9915e51bb",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an automated grading assistant designed for STRICT and ACCURATE academic grading.\n\nYou will be given:\n1. A grading rubric containing questions, expected concepts, and point values\n2. A student's answers for the SAME assignment\n\nYour task is to grade the student's answers with maximum accuracy and ZERO hallucination.\n\n────────────────────────────\nGRADING RULES (MANDATORY)\n────────────────────────────\n\n1. Grade ONLY using the provided rubric.\n2. Do NOT assume, infer, or invent any rubric content.\n3. Do NOT reuse or mix questions from other assignments.\n4. If a student answers a DIFFERENT question than the one in the rubric, award 0 points for that question.\n5. The total score MUST be calculated by summing the rubric point values — NEVER assume a fixed total.\n6. Partial credit IS allowed and REQUIRED when appropriate.\n\n────────────────────────────\nPARTIAL CREDIT POLICY\n────────────────────────────\n\nFor each question:\n- FULL points: Answer is conceptually correct AND sufficiently complete.\n- PARTIAL points: Answer contains correct core idea(s) but is:\n  - incomplete, OR\n  - imprecise, OR\n  - missing important details, OR\n  - partially incorrect.\n- ZERO points: Answer is incorrect, irrelevant, or answers a different question.\n\nWhen assigning partial credit:\n- Clearly explain WHICH parts are correct\n- Clearly explain WHICH parts are missing or incorrect\n- Award points proportionally (not just 0 or full)\n\n────────────────────────────\nSTRICT GRADING PROCEDURE (FOLLOW EXACTLY)\n────────────────────────────\n\nFor EACH question in the rubric:\n1. Identify the question text and maximum points.\n2. Identify the key concepts required by the rubric.\n3. Compare the student’s answer ONLY to those required concepts.\n4. Determine correctness level:\n   - Fully correct\n   - Partially correct\n   - Incorrect\n5. Assign points accordingly.\n6. Provide a concise, factual justification.\n\nDo NOT reward:\n- Vague statements\n- Buzzwords without explanation\n- Answers that merely restate the question\n\n────────────────────────────\nINPUT DATA\n────────────────────────────\n\nAssignment:\n{{ $json.assignment_name }}\n\nRubric:\n{{ $json.rubric_text }}\n\nStudent ID:\n{{ $json.student_id }}\n\nStudent Answer:\n{{ $json.student_text }}\n\n────────────────────────────\nOUTPUT FORMAT (STRICT)\n────────────────────────────\n\nReturn ONLY valid JSON in the following format:\n\n{\n  \"Assignment\": \"{{ $json.assignment_name }}\",\n  \"student_id\": \"{{ $json.student_id }}\",\n  \"total_points\": number,\n  \"score_awarded\": number,\n  \"per_question_breakdown\": [\n    {\n      \"question\": string,\n      \"max_points\": number,\n      \"awarded_points\": number,\n      \"comment\": string\n    }\n  ],\n  \"overall_feedback\": string\n}\n\nIMPORTANT:\n- Do NOT include markdown\n- Do NOT include explanations outside JSON\n- Ensure awarded_points ≤ max_points\n- Ensure score_awarded = sum of awarded_points\n",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1392,
+        144
+      ],
+      "id": "476b3851-fdda-4d44-9dbe-5045bac9cd9e",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a7818659-f1b9-4521-9180-271465c338b5",
+              "name": "rubric_text",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "1a9be34f-37ae-4396-b8b7-9ffd93881c55",
+              "name": "rubric_file",
+              "value": "={{ $json.info.Title }}",
+              "type": "string"
+            },
+            {
+              "id": "3bdf1f73-23ef-42d0-a100-35876292ff0d",
+              "name": "assignment_name",
+              "value": "={{ $('Set_Assignment_Context').item.json.assignment_name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        704,
+        0
+      ],
+      "id": "d318027e-fc36-48ac-bdad-358f90dbcd56",
+      "name": "Rubric_Set"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        336
+      ],
+      "id": "2ed7931d-a059-488c-b362-6faf5f734889",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YsZnrFvJo745Thqt",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "useDataOfInput": 2
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        960,
+        144
+      ],
+      "id": "06799865-2a8f-4a07-b764-4b2f424061cd",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7f121071-87de-40f2-9405-fb89f6bebaf0",
+              "name": "Student ID",
+              "value": "={{ $json.output.student_id }}",
+              "type": "string"
+            },
+            {
+              "id": "1a782bc3-3089-467d-8b40-bb77c1c2586e",
+              "name": "Assignment",
+              "value": "={{ $json.output.Assignment }}",
+              "type": "string"
+            },
+            {
+              "id": "f41995af-260e-4c47-83c8-865eb5a74fa5",
+              "name": "Score Awarded",
+              "value": "={{ $json.output.score_awarded }}",
+              "type": "number"
+            },
+            {
+              "id": "6ea3c997-d5ce-484d-8a83-6dda009b8140",
+              "name": "Total Points",
+              "value": "={{ $json.output.total_points }}",
+              "type": "number"
+            },
+            {
+              "id": "e973b9b3-27f8-47af-b655-6a056d9cbdeb",
+              "name": "Comment",
+              "value": "={{ $json.output.overall_feedback }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        144
+      ],
+      "id": "9b78504c-5564-4a00-adf0-1cc5baa73deb",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "1ZSs6M1y2rlHVl9kGIW7HTcf9knL1lvo9",
+            "mode": "list",
+            "cachedResultName": "Autograding",
+            "cachedResultUrl": "https://drive.google.com/drive/folders/1ZSs6M1y2rlHVl9kGIW7HTcf9knL1lvo9"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -1632,
+        80
+      ],
+      "id": "bdc666b0-2b45-4c79-be8f-b8f28b4a8cef",
+      "name": "Main Folder",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "V3JU4q50eACpIIMN",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "={{ $('Set_Assignment_Context').item.json.id }}",
+            "mode": "id"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -320,
+        96
+      ],
+      "id": "75d50d19-1eba-4601-8cb4-38da6a308154",
+      "name": "Assignments",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "V3JU4q50eACpIIMN",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3fba62df-9a8d-4e17-a9bc-c9cf1ee5b8ac",
+              "name": "assignment_name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "e9493655-f8be-45af-9859-128a4b949557",
+              "name": "assignment_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1360,
+        80
+      ],
+      "id": "b3453e9a-c0f1-4112-ad03-b042910a467f",
+      "name": "Set_Assignment_Context"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "26453b09-cb5c-45a1-b4a1-0811bc860139",
+              "name": "rubric_text",
+              "value": "={{ $items(\"Rubric_Set\").find(r => r.json.assignment_name === $json.assignment_name).json.rubric_text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1168,
+        144
+      ],
+      "id": "52989b45-715c-4ef7-8cbe-d3dc1a6771f1",
+      "name": "Attach_Rubric_To_Student"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Create spreadsheet').item.json.spreadsheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Create spreadsheet').item.json.sheets[0].properties.title }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "student": "={{ $json.student }}",
+            "assignment": "={{ $json.assignment }}",
+            "score": "={{ $json.score }}",
+            "total": "={{ $json.total }}",
+            "comment": "={{ $json.comment }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "spreadsheet_id ",
+              "displayName": "spreadsheet_id ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "student",
+              "displayName": "student",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "assignment",
+              "displayName": "assignment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "score",
+              "displayName": "score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total",
+              "displayName": "total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "comment",
+              "displayName": "comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2032,
+        352
+      ],
+      "id": "0190d8d2-f62a-4d7b-ab45-59b253bd5c09",
+      "name": "Append row in sheet1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cY9ZMKCFP7OXCnDV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "spreadsheet",
+        "title": "={{ $json.assignment_name }}_Grades",
+        "sheetsUi": {
+          "sheetValues": [
+            {
+              "title": "Grades"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -816,
+        96
+      ],
+      "id": "bc2d67e5-f5fa-4071-9191-5f5cc4629976",
+      "name": "Create spreadsheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cY9ZMKCFP7OXCnDV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "baceea7d-106a-4986-bacb-20e1ffa46e48",
+              "name": "spreadsheet_id ",
+              "value": "={{ $json.spreadsheetId }}",
+              "type": "string"
+            },
+            {
+              "id": "a9750601-d9df-45ba-910b-03e275722084",
+              "name": "Student ID",
+              "value": "student",
+              "type": "string"
+            },
+            {
+              "id": "94eb2787-cafb-480d-9db8-154134d5b616",
+              "name": "Assignment ",
+              "value": "={{ $json.properties.title }}",
+              "type": "string"
+            },
+            {
+              "id": "2a5b13c6-bc24-4dc7-af1c-5be937a1345d",
+              "name": "Score Awarded",
+              "value": "score",
+              "type": "string"
+            },
+            {
+              "id": "01277f9b-3849-4157-8756-657f6f34659f",
+              "name": "Total Points",
+              "value": "total",
+              "type": "string"
+            },
+            {
+              "id": "2e8b1ef7-c1c6-474b-83c8-09d415c75357",
+              "name": "Comment",
+              "value": "comment",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -560,
+        96
+      ],
+      "id": "e34676fb-15bd-4582-85db-9e416158ee14",
+      "name": "Build_Header_Object"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1104,
+        80
+      ],
+      "id": "6158fc30-c2cd-4776-b863-3cdab7350d0c",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1872,
+        80
+      ],
+      "id": "e2a8286e-4e7d-41a5-9359-d6f8ac4cbfc5",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "={\n  \"type\": \"object\",\n  \"properties\": {\n    \"Assignment\": {\n      \"type\": \"string\"\n    },\n    \"student_id\": {\n      \"type\": \"string\"\n    },\n    \"total_points\": {\n      \"type\": \"number\"\n    },\n    \"score_awarded\": {\n      \"type\": \"number\"\n    },\n    \"per_question_breakdown\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"question\": { \"type\": \"string\" },\n          \"max_points\": { \"type\": \"number\" },\n          \"awarded_points\": { \"type\": \"number\" },\n          \"comment\": { \"type\": \"string\" }\n        },\n        \"required\": [\"question\", \"max_points\", \"awarded_points\", \"comment\"]\n      }\n    },\n    \"overall_feedback\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"Assignment\",\n    \"student_id\",\n    \"total_points\",\n    \"score_awarded\",\n    \"per_question_breakdown\",\n    \"overall_feedback\"\n  ]\n}\n"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1568,
+        352
+      ],
+      "id": "33173766-9397-4307-9180-b7756de8e44f",
+      "name": "Structured Output Parser"
+    }
+  ],
+  "connections": {
+    "Rubric": {
+      "main": [
+        [
+          {
+            "node": "Download file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Rubric_Set",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file1": {
+      "main": [
+        [
+          {
+            "node": "Extract from File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submission": {
+      "main": [
+        [
+          {
+            "node": "Download file1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rubric_Set": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Attach_Rubric_To_Student",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Main Folder": {
+      "main": [
+        [
+          {
+            "node": "Set_Assignment_Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assignments": {
+      "main": [
+        [
+          {
+            "node": "Rubric",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set_Assignment_Context": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach_Rubric_To_Student": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create spreadsheet": {
+      "main": [
+        [
+          {
+            "node": "Build_Header_Object",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build_Header_Object": {
+      "main": [
+        [
+          {
+            "node": "Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Create spreadsheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Main Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "60ead48542c6ab4688f2b085f0e57c73ecddf4d910ccc8dbf4ebd184ccc13f4a"
+  }
+}
