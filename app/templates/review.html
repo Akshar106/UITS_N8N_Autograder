@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Review - {{ assignment_name }}{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('dashboard.courses') }}">&larr; Back to courses</a></p>
+  <h1>Review: {{ assignment_name }}</h1>
+  <p class="muted">AI-suggested grades below are drafts only. Edit or approve each row, then export the approved grades to Excel for entry into Canvas.</p>
+  <p><a class="btn" href="{{ url_for('export.export_grades', course_id=course_id, assignment_id=assignment_id) }}">Export to Excel</a></p>
+
+  {% if not submissions %}
+    <p class="muted">No graded submissions yet. Run grading from the assignment page first.</p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th>AI Score</th>
+          <th>AI Feedback</th>
+          <th>Final Score</th>
+          <th>Final Feedback</th>
+          <th>Approved</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in submissions %}
+          {% set form_id = "review-form-" ~ s.id %}
+          <tr>
+            <td>{{ s.student_name }}<br><span class="muted">{{ s.student_id }}</span></td>
+            <td>
+              {% if s.ai_error %}
+                <span class="flash flash-error">{{ s.ai_error }}</span>
+              {% else %}
+                {{ s.ai_score }} / {{ s.ai_total }}
+              {% endif %}
+            </td>
+            <td>
+              {{ s.ai_feedback or '' }}
+              {% if s.breakdown %}
+                <details>
+                  <summary>Per-question breakdown</summary>
+                  <ul>
+                    {% for q in s.breakdown %}
+                      <li><strong>{{ q.question }}</strong> — {{ q.awarded_points }}/{{ q.max_points }}: {{ q.comment }}</li>
+                    {% endfor %}
+                  </ul>
+                </details>
+              {% endif %}
+            </td>
+            <td><input form="{{ form_id }}" type="number" step="0.1" name="faculty_score" value="{{ s.faculty_score if s.faculty_score is not none else (s.ai_score if s.ai_score is not none else '') }}"></td>
+            <td><textarea form="{{ form_id }}" name="faculty_feedback">{{ s.faculty_feedback or s.ai_feedback or '' }}</textarea></td>
+            <td><input form="{{ form_id }}" type="checkbox" name="approved" {{ 'checked' if s.approved }}></td>
+            <td>
+              <form id="{{ form_id }}" method="post" action="{{ url_for('review.save_review', course_id=course_id, assignment_id=assignment_id, submission_id=s.id) }}"></form>
+              <button class="btn" type="submit" form="{{ form_id }}">Save</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}

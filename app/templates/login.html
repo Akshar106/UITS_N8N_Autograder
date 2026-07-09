@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Log in - Autograder{% endblock %}
+{% block content %}
+  <div class="card">
+    <h1>Faculty Autograder</h1>
+    <p class="muted">Log in with your Canvas account to connect your courses. Authentication happens entirely on Canvas/IU's login page — this app never sees your password.</p>
+    {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+    <a class="btn" href="{{ url_for('auth.login') }}">Log in with Canvas</a>
+  </div>
+{% endblock %}

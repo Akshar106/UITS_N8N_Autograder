@@ -1,0 +1,21 @@
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+class Config:
+    SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "dev-only-insecure-key")
+
+    CANVAS_BASE_URL = os.getenv("CANVAS_BASE_URL", "").rstrip("/")
+    CANVAS_CLIENT_ID = os.getenv("CANVAS_CLIENT_ID")
+    CANVAS_CLIENT_SECRET = os.getenv("CANVAS_CLIENT_SECRET")
+    CANVAS_REDIRECT_URI = os.getenv("CANVAS_REDIRECT_URI", "http://localhost:8000/oauth/callback")
+    CANVAS_OAUTH_SCOPES = os.getenv("CANVAS_OAUTH_SCOPES", "").split()
+
+    REALLM_API_KEY = os.getenv("REALLM_API_KEY")
+    REALLM_URL = os.getenv("REALLM_URL")
+    REALLM_MODEL_NAME = os.getenv("REALLM_MODEL_NAME")
+
+    DATABASE_PATH = os.getenv("DATABASE_PATH", "instance/autograder.sqlite3")

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ course.name }} - Assignments{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('dashboard.courses') }}">&larr; Back to courses</a></p>
+  <h1>{{ course.name }}</h1>
+  {% if not assignments %}
+    <p class="muted">No assignments found for this course.</p>
+  {% else %}
+    <table>
+      <thead><tr><th>Assignment</th><th>Due</th><th>Rubric</th><th></th></tr></thead>
+      <tbody>
+        {% for a in assignments %}
+          <tr>
+            <td>{{ a.name }}</td>
+            <td>{{ a.due_at or '—' }}</td>
+            <td>{{ 'Uploaded' if a._rubric_uploaded else 'Not uploaded' }}</td>
+            <td><a class="btn" href="{{ url_for('rubric.upload_rubric', course_id=course.id, assignment_id=a.id) }}">Grade this assignment</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}

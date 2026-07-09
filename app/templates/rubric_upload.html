@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Rubric - {{ assignment.name }}{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('dashboard.assignments', course_id=course_id) }}">&larr; Back to assignments</a></p>
+  <h1>{{ assignment.name }}</h1>
+
+  <div class="card">
+    <h2>Rubric</h2>
+    {% if existing_rubric %}
+      <p>Current rubric: <strong>{{ existing_rubric.rubric_filename }}</strong> (uploaded {{ existing_rubric.uploaded_at }})</p>
+    {% else %}
+      <p class="muted">No rubric uploaded yet.</p>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="rubric_file" accept=".pdf,.docx,.txt" required>
+      <br><br>
+      <button class="btn" type="submit">{{ 'Replace rubric' if existing_rubric else 'Upload rubric' }}</button>
+    </form>
+  </div>
+
+  {% if existing_rubric %}
+    <div class="card">
+      <h2>Run grading</h2>
+      <p class="muted">This calls the AI grader on every submission for this assignment. Nothing is written to Canvas — grades land in a review queue for you to approve first.</p>
+      <form method="post" action="{{ url_for('rubric.run_grading', course_id=course_id, assignment_id=assignment.id) }}">
+        <button class="btn" type="submit">Grade all submissions</button>
+      </form>
+      <p><a href="{{ url_for('review.review_queue', course_id=course_id, assignment_id=assignment.id) }}">View review queue &rarr;</a></p>
+    </div>
+  {% endif %}
+{% endblock %}
