@@ -1,0 +1,3 @@
+Q1: A hash table is a type of table used in databases to join two tables together based on a common column.
+
+Q2: A stack is a pile of memory used by a program to store its call frames during recursion.

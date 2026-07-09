@@ -1,0 +1,3 @@
+Q1: A hash table is a data structure that stores data and lets you look it up fast, usually O(1).
+
+Q2: Stack and queue are both ways to store a list of items and you can add or remove items from them.
