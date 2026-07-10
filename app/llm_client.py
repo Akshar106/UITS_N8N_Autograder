@@ -25,7 +25,11 @@ def call_reallm(systemPrompt: str, prompt: str) -> str | None:
         "temperature": 0.1,
     }
 
-    response = requests.post(REALLM_URL, headers=HEADERS, json=payload)
+    try:
+        response = requests.post(REALLM_URL, headers=HEADERS, json=payload, timeout=180)
+    except requests.RequestException as e:
+        print(f"ReaLLM request failed: {e}")
+        return None
 
     if response.status_code != 200:
         print(f"ReaLLM API error {response.status_code}: {response.text}")

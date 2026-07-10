@@ -136,8 +136,11 @@ def list_submissions(access_token, course_id, assignment_id):
     )
 
 
-def download_attachment(url):
-    resp = requests.get(url, timeout=30)
+def download_attachment(url, access_token=None):
+    # Submission attachment URLs usually embed a verifier token, but pass the
+    # bearer token too for instances/files where the verifier is absent.
+    headers = _auth_headers(access_token) if access_token else {}
+    resp = requests.get(url, headers=headers, timeout=30)
     if resp.status_code != 200:
         raise CanvasAPIError(f"Failed to download submission file ({resp.status_code})")
     return resp.content

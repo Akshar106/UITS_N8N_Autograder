@@ -6,30 +6,42 @@ from flask import redirect, session, url_for
 from app import canvas_client, storage
 
 
+class AuthError(Exception):
+    """Session exists but no usable Canvas token; user must log in again."""
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("canvas_user_id"):
-            return redirect(url_for("auth.login"))
+            return redirect(url_for("auth.index"))
         return view(*args, **kwargs)
 
     return wrapped
 
 
 def get_valid_access_token():
-    """Returns a usable Canvas access token for the logged-in user, refreshing if needed."""
+    """Returns a usable Canvas access token for the logged-in user, refreshing if needed.
+
+    Raises AuthError when there is no stored token or the refresh fails —
+    the app-level error handler clears the session and sends the user back
+    to the login page.
+    """
     canvas_user_id = session.get("canvas_user_id")
     if not canvas_user_id:
-        return None
+        raise AuthError("Not logged in.")
 
     token = storage.get_token(canvas_user_id)
     if not token:
-        return None
+        raise AuthError("Your Canvas session is no longer valid. Please log in again.")
 
     if token["expires_at"]:
         expires_at = datetime.fromisoformat(token["expires_at"])
         if datetime.now(timezone.utc) >= expires_at and token["refresh_token"]:
-            refreshed = canvas_client.refresh_access_token(token["refresh_token"])
+            try:
+                refreshed = canvas_client.refresh_access_token(token["refresh_token"])
+            except canvas_client.CanvasAPIError as exc:
+                raise AuthError("Your Canvas session expired and could not be renewed. Please log in again.") from exc
             expires_at_new = compute_expiry(refreshed.get("expires_in"))
             storage.save_token(
                 canvas_user_id,

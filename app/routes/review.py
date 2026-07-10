@@ -28,7 +28,14 @@ def review_queue(course_id, assignment_id):
 @login_required
 def save_review(course_id, assignment_id, submission_id):
     faculty_score_raw = request.form.get("faculty_score", "").strip()
-    faculty_score = float(faculty_score_raw) if faculty_score_raw else None
+    if faculty_score_raw:
+        try:
+            faculty_score = float(faculty_score_raw)
+        except ValueError:
+            flash(f"'{faculty_score_raw}' is not a valid score — nothing was saved.", "error")
+            return redirect(url_for("review.review_queue", course_id=course_id, assignment_id=assignment_id))
+    else:
+        faculty_score = None
     faculty_feedback = request.form.get("faculty_feedback", "").strip() or None
     approved = request.form.get("approved") == "on"
 

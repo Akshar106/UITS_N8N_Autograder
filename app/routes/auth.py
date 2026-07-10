@@ -1,4 +1,4 @@
-from flask import Blueprint, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
 
 from app import canvas_client, storage
 from app.auth_utils import compute_expiry
@@ -15,6 +15,13 @@ def index():
 
 @auth_bp.route("/login")
 def login():
+    cfg = current_app.config
+    if not cfg["CANVAS_CLIENT_ID"] or not cfg["CANVAS_CLIENT_SECRET"] or not cfg["CANVAS_BASE_URL"]:
+        return render_template(
+            "login.html",
+            error="Canvas is not configured yet: set CANVAS_BASE_URL, CANVAS_CLIENT_ID and "
+                  "CANVAS_CLIENT_SECRET in .env (values come from the UITS Developer Key).",
+        ), 503
     state = canvas_client.generate_state()
     session["oauth_state"] = state
     return redirect(canvas_client.build_authorize_url(state))
@@ -35,9 +42,15 @@ def oauth_callback():
     if not code:
         return render_template("login.html", error="Canvas did not return an authorization code."), 400
 
-    token_response = canvas_client.exchange_code_for_token(code)
-    user = token_response.get("user", {})
-    canvas_user_id = str(user.get("id"))
+    try:
+        token_response = canvas_client.exchange_code_for_token(code)
+    except canvas_client.CanvasAPIError as exc:
+        return render_template("login.html", error=f"Could not complete Canvas login: {exc}"), 502
+
+    user = token_response.get("user") or {}
+    if not user.get("id"):
+        return render_template("login.html", error="Canvas login succeeded but returned no user identity."), 502
+    canvas_user_id = str(user["id"])
     canvas_user_name = user.get("name", "")
 
     storage.save_token(

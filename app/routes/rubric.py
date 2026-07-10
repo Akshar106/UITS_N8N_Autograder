@@ -54,16 +54,18 @@ def run_grading(course_id, assignment_id):
 
     submissions = canvas_client.list_submissions(token, course_id, assignment_id)
     graded_count = 0
+    attempted_count = 0
 
     for submission in submissions:
         if submission.get("workflow_state") == "unsubmitted":
             continue
+        attempted_count += 1
 
         user = submission.get("user") or {}
         student_id = str(submission.get("user_id"))
         student_name = user.get("name", f"Student {student_id}")
 
-        student_text, submission_filename, extraction_error = _extract_submission_text(submission)
+        student_text, submission_filename, extraction_error = _extract_submission_text(submission, token)
 
         if extraction_error:
             storage.upsert_graded_submission(
@@ -89,23 +91,31 @@ def run_grading(course_id, assignment_id):
                 submission_filename, None, None, None, None, ai_error=result["error"],
             )
 
-    flash(f"Graded {graded_count} of {len(submissions)} submissions. Review before syncing to Canvas.", "success")
+    flash(
+        f"Graded {graded_count} of {attempted_count} submitted assignments "
+        f"({len(submissions) - attempted_count} unsubmitted skipped). Review before entering grades in Canvas.",
+        "success",
+    )
     return redirect(url_for("review.review_queue", course_id=course_id, assignment_id=assignment_id))
 
 
-def _extract_submission_text(submission):
+def _extract_submission_text(submission, access_token):
     attachments = submission.get("attachments") or []
     if attachments:
         attachment = attachments[0]
         try:
-            content = canvas_client.download_attachment(attachment["url"])
+            content = canvas_client.download_attachment(attachment["url"], access_token)
             text = extract.extract_text(attachment["filename"], content)
-            return text, attachment["filename"], None
         except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
             return None, attachment.get("filename"), str(exc)
+        if not text.strip():
+            return None, attachment["filename"], (
+                "No text could be extracted from this file (it may be scanned/image-only). Grade manually."
+            )
+        return text, attachment["filename"], None
 
     body = submission.get("body")
-    if body:
+    if body and extract.strip_html(body):
         return extract.strip_html(body), None, None
 
     return None, None, "No file attachment or text entry found for this submission."
