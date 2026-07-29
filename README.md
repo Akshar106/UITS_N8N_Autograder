@@ -43,8 +43,8 @@ Then:
 
 3. **Courses/assignments** are pulled live from the Canvas API (read-only) using the connected Canvas token.
 4. **Rubric upload** accepts PDF/DOCX/TXT, extracts the text, and stores it per assignment.
-5. **Grading** downloads each submission (file upload or text-entry), sends rubric + submission text to the LLM with a strict grading prompt, and stores the structured result (score, per-question breakdown, feedback) in a local SQLite review queue.
-6. **Review** lets faculty see the AI's score/feedback per student, override either field, and mark it approved.
+5. **Grading** runs in a background thread (started when you click "Grade all submissions," not blocking the request) — downloads each submission (file upload or text-entry, all attachments if there's more than one), sends rubric + submission text to the LLM with a strict grading prompt, and stores each result (score, per-question breakdown, feedback) as soon as it's ready. The review page shows live progress and refreshes automatically until grading finishes.
+6. **Review** lets faculty see the AI's score/feedback per student, override either field, and mark it approved. If the AI's computed total doesn't match the assignment's actual Canvas points total, a warning banner flags it before anything gets entered into Canvas.
 7. **Export** builds a formatted `.xlsx` (AI score, final score, percentage, approval status, feedback) for manual entry into the Canvas gradebook — the Developer Key is read-only, so there is no automated gradebook write-back.
 
 ### What to give the IU Login team
@@ -69,6 +69,6 @@ The Dev Key already exists (created by Erik on the Test instance). When ready to
 - Session cookies are marked `Secure` automatically when `APP_ENV=production` (requires HTTPS, which Azure App Service provides by default).
 - `ProxyFix` is applied so redirect URIs build correctly behind Azure's reverse proxy.
 - `/healthz` returns `{"status": "ok"}` for Azure's health check / load balancer probes.
-- Grading currently runs synchronously in the request; for large rosters this may need to move to a background job.
+- Grading runs in a background thread per process; only one grading run per assignment can be in flight at a time (a second click while one is running is refused with a message, not queued). Progress is persisted in SQLite, so it survives page refreshes and works correctly even behind multiple `gunicorn` workers.
 - `autograder.json` is the original n8n prototype (Google Drive-based) and is kept only for reference.
 - Run with `gunicorn` in production (included in `requirements.txt`), not the Flask dev server: `gunicorn -w 2 -b 0.0.0.0:8000 run:app`.

@@ -1,8 +1,30 @@
 {% extends "base.html" %}
 {% block title %}Review - {{ assignment_name }}{% endblock %}
+{% block head_extra %}
+  {% if job and job.status == 'running' %}<meta http-equiv="refresh" content="3">{% endif %}
+{% endblock %}
 {% block content %}
   <p><a href="{{ url_for('dashboard.courses') }}">&larr; Back to courses</a></p>
   <h1>Review: {{ assignment_name }}</h1>
+
+  {% if job and job.status == 'running' %}
+    <div class="flash flash-success">
+      Grading in progress: {{ job.done }} of {{ job.total }} submissions done. This page refreshes automatically every few seconds.
+    </div>
+  {% elif job and job.status == 'error' %}
+    <div class="flash flash-error">
+      Grading stopped early due to an unexpected error: {{ job.message }}. Submissions graded before the error are below; you can re-run grading to retry the rest.
+    </div>
+  {% endif %}
+
+  {% if total_mismatch %}
+    <div class="flash flash-error">
+      Heads up: Canvas has this assignment configured for {{ total_mismatch.expected }} points, but the AI computed
+      a different total ({{ total_mismatch.found | join(', ') }}) for at least one submission. Double-check the
+      uploaded rubric before entering any of these grades in Canvas.
+    </div>
+  {% endif %}
+
   <p class="muted">AI-suggested grades below are drafts only. Edit or approve each row, then export the approved grades to Excel for entry into Canvas.</p>
   <p><a class="btn" href="{{ url_for('export.export_grades', course_id=course_id, assignment_id=assignment_id) }}">Export to Excel</a></p>
 

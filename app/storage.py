@@ -19,7 +19,19 @@ CREATE TABLE IF NOT EXISTS rubrics (
     assignment_name TEXT,
     rubric_text TEXT NOT NULL,
     rubric_filename TEXT,
+    canvas_points_possible REAL,
     uploaded_at TEXT,
+    PRIMARY KEY (course_id, assignment_id)
+);
+
+CREATE TABLE IF NOT EXISTS grading_jobs (
+    course_id TEXT NOT NULL,
+    assignment_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    total INTEGER NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    updated_at TEXT,
     PRIMARY KEY (course_id, assignment_id)
 );
 
@@ -67,6 +79,12 @@ def init_db(app):
     with app.app_context():
         db = get_db()
         db.executescript(SCHEMA)
+        # CREATE TABLE IF NOT EXISTS won't add new columns to a table created by
+        # an older version of this schema -- patch those in for existing local DBs.
+        try:
+            db.execute("ALTER TABLE rubrics ADD COLUMN canvas_points_possible REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         db.commit()
 
 
@@ -106,19 +124,21 @@ def delete_canvas_token(iu_user_id):
 
 # --- rubrics -----------------------------------------------------------------
 
-def save_rubric(course_id, assignment_id, assignment_name, rubric_text, rubric_filename):
+def save_rubric(course_id, assignment_id, assignment_name, rubric_text, rubric_filename, canvas_points_possible=None):
     db = get_db()
     db.execute(
         """
-        INSERT INTO rubrics (course_id, assignment_id, assignment_name, rubric_text, rubric_filename, uploaded_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO rubrics (course_id, assignment_id, assignment_name, rubric_text, rubric_filename,
+                              canvas_points_possible, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(course_id, assignment_id) DO UPDATE SET
             assignment_name = excluded.assignment_name,
             rubric_text = excluded.rubric_text,
             rubric_filename = excluded.rubric_filename,
+            canvas_points_possible = excluded.canvas_points_possible,
             uploaded_at = excluded.uploaded_at
         """,
-        (course_id, assignment_id, assignment_name, rubric_text, rubric_filename, _now()),
+        (course_id, assignment_id, assignment_name, rubric_text, rubric_filename, canvas_points_possible, _now()),
     )
     db.commit()
 
@@ -186,3 +206,46 @@ def save_faculty_review(submission_id, faculty_score, faculty_feedback, approved
         (faculty_score, faculty_feedback, 1 if approved else 0, submission_id),
     )
     db.commit()
+
+
+# --- grading jobs (background grading progress) -------------------------------
+
+def start_grading_job(course_id, assignment_id, total):
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO grading_jobs (course_id, assignment_id, status, total, done, message, updated_at)
+        VALUES (?, ?, 'running', ?, 0, NULL, ?)
+        ON CONFLICT(course_id, assignment_id) DO UPDATE SET
+            status = 'running', total = excluded.total, done = 0, message = NULL, updated_at = excluded.updated_at
+        """,
+        (course_id, assignment_id, total, _now()),
+    )
+    db.commit()
+
+
+def increment_grading_progress(course_id, assignment_id):
+    db = get_db()
+    db.execute(
+        "UPDATE grading_jobs SET done = done + 1, updated_at = ? WHERE course_id = ? AND assignment_id = ?",
+        (_now(), course_id, assignment_id),
+    )
+    db.commit()
+
+
+def finish_grading_job(course_id, assignment_id, status, message=None):
+    db = get_db()
+    db.execute(
+        "UPDATE grading_jobs SET status = ?, message = ?, updated_at = ? WHERE course_id = ? AND assignment_id = ?",
+        (status, message, _now(), course_id, assignment_id),
+    )
+    db.commit()
+
+
+def get_grading_job(course_id, assignment_id):
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM grading_jobs WHERE course_id = ? AND assignment_id = ?",
+        (course_id, assignment_id),
+    ).fetchone()
+    return dict(row) if row else None
