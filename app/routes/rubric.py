@@ -59,10 +59,13 @@ def run_grading(course_id, assignment_id):
     for submission in submissions:
         if submission.get("workflow_state") == "unsubmitted":
             continue
+        raw_user_id = submission.get("user_id")
+        if raw_user_id is None:
+            continue  # can't reliably record a grade with no student identity
         attempted_count += 1
 
         user = submission.get("user") or {}
-        student_id = str(submission.get("user_id"))
+        student_id = str(raw_user_id)
         student_name = user.get("name", f"Student {student_id}")
 
         student_text, submission_filename, extraction_error = _extract_submission_text(submission, token)
@@ -93,7 +96,8 @@ def run_grading(course_id, assignment_id):
 
     flash(
         f"Graded {graded_count} of {attempted_count} submitted assignments "
-        f"({len(submissions) - attempted_count} unsubmitted skipped). Review before entering grades in Canvas.",
+        f"({len(submissions) - attempted_count} skipped: unsubmitted or missing student identity). "
+        f"Review before entering grades in Canvas.",
         "success",
     )
     return redirect(url_for("review.review_queue", course_id=course_id, assignment_id=assignment_id))
@@ -102,17 +106,32 @@ def run_grading(course_id, assignment_id):
 def _extract_submission_text(submission, access_token):
     attachments = submission.get("attachments") or []
     if attachments:
-        attachment = attachments[0]
-        try:
-            content = canvas_client.download_attachment(attachment["url"], access_token)
-            text = extract.extract_text(attachment["filename"], content)
-        except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
-            return None, attachment.get("filename"), str(exc)
-        if not text.strip():
-            return None, attachment["filename"], (
-                "No text could be extracted from this file (it may be scanned/image-only). Grade manually."
-            )
-        return text, attachment["filename"], None
+        # Students can upload more than one file (e.g. code + a writeup); grade
+        # all of them by concatenating their text, not just the first.
+        parts = []
+        notes = []
+        filenames = []
+        for attachment in attachments:
+            filename = attachment.get("filename", "file")
+            try:
+                content = canvas_client.download_attachment(attachment["url"], access_token)
+                text = extract.extract_text(filename, content)
+            except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
+                notes.append(f"[Could not read {filename}: {exc}]")
+                continue
+            if not text.strip():
+                notes.append(f"[No text could be extracted from {filename} (scanned/image-only?)]")
+                continue
+            filenames.append(filename)
+            parts.append(f"--- {filename} ---\n{text}")
+
+        combined = "\n\n".join(parts)
+        if not combined.strip():
+            reason = " ".join(notes) or "No text could be extracted from the submitted file(s)."
+            return None, ", ".join(a.get("filename", "file") for a in attachments), reason
+        if notes:
+            combined += "\n\n" + "\n".join(notes)
+        return combined, ", ".join(filenames), None
 
     body = submission.get("body")
     if body and extract.strip_html(body):

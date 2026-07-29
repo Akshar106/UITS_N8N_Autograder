@@ -90,8 +90,33 @@ IMPORTANT:
 """
 
 REQUIRED_FIELDS = ("Assignment", "student_id", "total_points", "score_awarded", "per_question_breakdown", "overall_feedback")
+NUMERIC_FIELDS = ("total_points", "score_awarded")
+NUMERIC_BREAKDOWN_FIELDS = ("max_points", "awarded_points")
 
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+
+
+def _coerce_numeric_fields(data):
+    # The prompt asks for JSON numbers, but LLMs sometimes quote them as
+    # strings anyway ("8" instead of 8) -- coerce here so downstream storage
+    # and the Excel export's score/percentage math never receive a string.
+    for field in NUMERIC_FIELDS:
+        try:
+            data[field] = float(data[field])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Field '{field}' is not numeric: {data[field]!r}") from exc
+
+    breakdown = data.get("per_question_breakdown")
+    if not isinstance(breakdown, list):
+        raise ValueError("'per_question_breakdown' is not a list")
+    for item in breakdown:
+        if not isinstance(item, dict):
+            raise ValueError(f"per_question_breakdown item is not an object: {item!r}")
+        for field in NUMERIC_BREAKDOWN_FIELDS:
+            try:
+                item[field] = float(item[field])
+            except (TypeError, ValueError, KeyError) as exc:
+                raise ValueError(f"per_question_breakdown field '{field}' is not numeric: {item.get(field)!r}") from exc
 
 
 def build_user_prompt(assignment_name, rubric_text, student_id, student_text):
@@ -109,6 +134,7 @@ def _parse_llm_json(raw_text):
     missing = [f for f in REQUIRED_FIELDS if f not in data]
     if missing:
         raise ValueError(f"LLM response missing fields: {missing}")
+    _coerce_numeric_fields(data)
     return data
 
 

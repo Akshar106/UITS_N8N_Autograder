@@ -1,3 +1,4 @@
+import requests
 from authlib.integrations.base_client.errors import OAuthError
 from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
 
@@ -6,6 +7,11 @@ from app.auth_utils import compute_expiry, login_required
 from app.iu_oidc import is_configured as iu_configured, oauth
 
 auth_bp = Blueprint("auth", __name__)
+
+# Raised by Authlib/requests when the IU Login discovery URL or token endpoint
+# is unreachable or returns something unparseable -- distinct from OAuthError,
+# which covers the OAuth protocol-level failures (bad state, denied consent).
+IU_OIDC_NETWORK_ERRORS = (requests.exceptions.RequestException, ValueError)
 
 
 # --- IU Login (front door) ----------------------------------------------------
@@ -27,7 +33,13 @@ def iu_login():
             error="IU Login is not configured yet: set IU_OIDC_DISCOVERY_URL, IU_OIDC_CLIENT_ID "
                   "and IU_OIDC_CLIENT_SECRET in .env (values come from the IU Login team).",
         ), 503
-    return oauth.iu.authorize_redirect(current_app.config["IU_OIDC_REDIRECT_URI"])
+    try:
+        return oauth.iu.authorize_redirect(current_app.config["IU_OIDC_REDIRECT_URI"])
+    except IU_OIDC_NETWORK_ERRORS as exc:
+        return render_template(
+            "login.html",
+            error=f"Could not reach IU Login right now ({exc}). Please try again shortly.",
+        ), 502
 
 
 @auth_bp.route("/auth/iu/callback")
@@ -39,6 +51,11 @@ def iu_callback():
         token = oauth.iu.authorize_access_token()
     except OAuthError as exc:
         return render_template("login.html", error=f"IU Login failed: {exc.description or exc.error}"), 400
+    except IU_OIDC_NETWORK_ERRORS as exc:
+        return render_template(
+            "login.html",
+            error=f"Could not reach IU Login right now ({exc}). Please try again shortly.",
+        ), 502
 
     userinfo = token.get("userinfo") or {}
     iu_user_id = userinfo.get("sub")
