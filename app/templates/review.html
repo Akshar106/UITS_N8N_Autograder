@@ -50,7 +50,9 @@
             <td><textarea form="{{ form_id }}" name="faculty_feedback">{{ s.faculty_feedback or s.ai_feedback or '' }}</textarea></td>
             <td><input form="{{ form_id }}" type="checkbox" name="approved" {{ 'checked' if s.approved }}></td>
             <td>
-              <form id="{{ form_id }}" method="post" action="{{ url_for('review.save_review', course_id=course_id, assignment_id=assignment_id, submission_id=s.id) }}"></form>
+              <form id="{{ form_id }}" method="post" action="{{ url_for('review.save_review', course_id=course_id, assignment_id=assignment_id, submission_id=s.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              </form>
               <button class="btn" type="submit" form="{{ form_id }}">Save</button>
             </td>
           </tr>

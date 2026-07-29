@@ -8,8 +8,8 @@
 <body>
   <header>
     <a href="{{ url_for('auth.index') }}">Autograder</a>
-    {% if session.get('canvas_user_name') %}
-      <span>{{ session['canvas_user_name'] }} &middot; <a href="{{ url_for('auth.logout') }}">Log out</a></span>
+    {% if session.get('iu_user_id') %}
+      <span>{{ session.get('iu_name') }} &middot; <a href="{{ url_for('auth.logout') }}">Log out</a></span>
     {% endif %}
   </header>
 

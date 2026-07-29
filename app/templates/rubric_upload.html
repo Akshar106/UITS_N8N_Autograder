@@ -12,6 +12,7 @@
       <p class="muted">No rubric uploaded yet.</p>
     {% endif %}
     <form method="post" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="file" name="rubric_file" accept=".pdf,.docx,.txt" required>
       <br><br>
       <button class="btn" type="submit">{{ 'Replace rubric' if existing_rubric else 'Upload rubric' }}</button>
@@ -23,6 +24,7 @@
       <h2>Run grading</h2>
       <p class="muted">This calls the AI grader on every submission for this assignment. Nothing is written to Canvas — grades land in a review queue for you to approve first.</p>
       <form method="post" action="{{ url_for('rubric.run_grading', course_id=course_id, assignment_id=assignment.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn" type="submit">Grade all submissions</button>
       </form>
       <p><a href="{{ url_for('review.review_queue', course_id=course_id, assignment_id=assignment.id) }}">View review queue &rarr;</a></p>

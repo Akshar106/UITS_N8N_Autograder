@@ -11,7 +11,7 @@ dashboard_bp = Blueprint("dashboard", __name__)
 def courses():
     token = get_valid_access_token()
     courses_list = canvas_client.list_teaching_courses(token)
-    return render_template("dashboard.html", courses=courses_list, user_name=session.get("canvas_user_name"))
+    return render_template("dashboard.html", courses=courses_list, user_name=session.get("iu_name"))
 
 
 @dashboard_bp.route("/courses/<course_id>/assignments")

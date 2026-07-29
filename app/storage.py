@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 from flask import current_app, g
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS oauth_tokens (
-    canvas_user_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS canvas_tokens (
+    iu_user_id TEXT PRIMARY KEY,
+    canvas_user_id TEXT,
     canvas_user_name TEXT,
     access_token TEXT NOT NULL,
     refresh_token TEXT,
@@ -69,36 +70,37 @@ def init_db(app):
         db.commit()
 
 
-# --- oauth tokens -----------------------------------------------------------
+# --- canvas tokens (keyed by the IU Login identity) ---------------------------
 
-def save_token(canvas_user_id, canvas_user_name, access_token, refresh_token, expires_at):
+def save_canvas_token(iu_user_id, canvas_user_id, canvas_user_name, access_token, refresh_token, expires_at):
     db = get_db()
     db.execute(
         """
-        INSERT INTO oauth_tokens (canvas_user_id, canvas_user_name, access_token, refresh_token, expires_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(canvas_user_id) DO UPDATE SET
+        INSERT INTO canvas_tokens (iu_user_id, canvas_user_id, canvas_user_name, access_token, refresh_token, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(iu_user_id) DO UPDATE SET
+            canvas_user_id = excluded.canvas_user_id,
             canvas_user_name = excluded.canvas_user_name,
             access_token = excluded.access_token,
             refresh_token = excluded.refresh_token,
             expires_at = excluded.expires_at
         """,
-        (canvas_user_id, canvas_user_name, access_token, refresh_token, expires_at),
+        (iu_user_id, canvas_user_id, canvas_user_name, access_token, refresh_token, expires_at),
     )
     db.commit()
 
 
-def get_token(canvas_user_id):
+def get_canvas_token(iu_user_id):
     db = get_db()
     row = db.execute(
-        "SELECT * FROM oauth_tokens WHERE canvas_user_id = ?", (canvas_user_id,)
+        "SELECT * FROM canvas_tokens WHERE iu_user_id = ?", (iu_user_id,)
     ).fetchone()
     return dict(row) if row else None
 
 
-def delete_token(canvas_user_id):
+def delete_canvas_token(iu_user_id):
     db = get_db()
-    db.execute("DELETE FROM oauth_tokens WHERE canvas_user_id = ?", (canvas_user_id,))
+    db.execute("DELETE FROM canvas_tokens WHERE iu_user_id = ?", (iu_user_id,))
     db.commit()
 
 
