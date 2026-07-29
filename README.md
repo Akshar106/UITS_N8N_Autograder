@@ -62,6 +62,33 @@ The Dev Key already exists (created by Erik on the Test instance). When ready to
 - Confirm the Test-instance Canvas domain (likely not `iu.instructure.com` — check with UITS) for `CANVAS_BASE_URL`.
 - Once deployed, send the production redirect URI (`https://<your-deployed-domain>/oauth/callback`) to be added alongside the localhost one.
 
+### Deploying to Azure App Service (manual Zip Deploy)
+
+1. **Create the App Service**: Linux, Python 3.11 runtime stack, Basic tier or higher (Free/Shared tiers don't support the always-on background-thread grading reliably, since they can idle/sleep the process mid-job).
+
+2. **Set Application Settings** (Configuration → Application settings) — these become environment variables, same names as `.env`:
+   - `FLASK_SECRET_KEY` — a real random value, not the dev default
+   - `APP_ENV=production` — turns on secure (HTTPS-only) session cookies
+   - `IU_OIDC_DISCOVERY_URL`, `IU_OIDC_CLIENT_ID`, `IU_OIDC_CLIENT_SECRET`, `IU_OIDC_REDIRECT_URI=https://<your-app>.azurewebsites.net/auth/iu/callback`
+   - `CANVAS_BASE_URL`, `CANVAS_CLIENT_ID`, `CANVAS_CLIENT_SECRET`, `CANVAS_REDIRECT_URI=https://<your-app>.azurewebsites.net/oauth/callback`
+   - `REALLM_API_KEY`, `REALLM_URL`, `REALLM_MODEL_NAME`
+   - **`DATABASE_PATH=/home/data/autograder.sqlite3`** — important: do *not* leave this as the local default (`instance/autograder.sqlite3`). Azure Zip Deploy replaces everything under the app's deployment folder (`/home/site/wwwroot`) on every redeploy, so a database living there would be silently wiped out the next time you ship an update. `/home` itself (outside `wwwroot`) persists across deployments and restarts — the app already creates the directory automatically if it doesn't exist.
+   - `SCM_DO_BUILD_DURING_DEPLOYMENT=true` — makes Azure run `pip install -r requirements.txt` after unzipping (the repo's `.deployment` file also sets this, but setting it here too doesn't hurt).
+
+3. **Set the Startup Command** (Configuration → General settings → Startup Command):
+   ```
+   gunicorn --bind=0.0.0.0 --timeout 600 run:app
+   ```
+   Without this, Azure's auto-detection may not find the app correctly since it uses an app-factory pattern (`run:app`, not a bare `app.py`).
+
+4. **Build and upload the zip**: from the repo root, zip everything *except* `.git/`, `__pycache__/`, `.venv`/`venv`, `.env`, and `instance/` (the local dev database — don't ship that to prod). Upload via **Deployment Center → Zip Deploy**, or **Advanced Tools (Kudu) → Tools → Zip Push Deploy** (drag the zip onto the page), or `az webapp deploy --resource-group <rg> --name <app> --src-path app.zip --type zip` if you have the Azure CLI.
+
+5. **Once deployed**, take the app's real URL (`https://<your-app>.azurewebsites.net`) and:
+   - Send `https://<your-app>.azurewebsites.net/auth/iu/callback` to the IU Login team as the production redirect URI.
+   - Send `https://<your-app>.azurewebsites.net/oauth/callback` to UITS (Erik) as the production Canvas redirect URI, per what Dhruv already told them to expect.
+
+6. **Verify it's alive**: `https://<your-app>.azurewebsites.net/healthz` should return `{"status": "ok"}`.
+
 ### Notes / follow-ups
 
 - Both IU and Canvas tokens are stored server-side (SQLite), never in the browser session cookie.
