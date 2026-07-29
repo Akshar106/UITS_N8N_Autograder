@@ -33,6 +33,7 @@ def review_queue(course_id, assignment_id):
             }
 
     job = storage.get_grading_job(course_id, assignment_id)
+    job_stale = storage.job_is_stale(job)
 
     return render_template(
         "review.html",
@@ -42,6 +43,7 @@ def review_queue(course_id, assignment_id):
         submissions=submissions,
         total_mismatch=total_mismatch,
         job=job,
+        job_stale=job_stale,
     )
 
 

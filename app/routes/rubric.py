@@ -57,7 +57,7 @@ def run_grading(course_id, assignment_id):
         return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
     existing_job = storage.get_grading_job(course_id, assignment_id)
-    if existing_job and existing_job["status"] == "running":
+    if existing_job and existing_job["status"] == "running" and not storage.job_is_stale(existing_job):
         flash("Grading is already running for this assignment -- check back shortly.", "error")
         return redirect(url_for("review.review_queue", course_id=course_id, assignment_id=assignment_id))
 

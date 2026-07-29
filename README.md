@@ -69,6 +69,6 @@ The Dev Key already exists (created by Erik on the Test instance). When ready to
 - Session cookies are marked `Secure` automatically when `APP_ENV=production` (requires HTTPS, which Azure App Service provides by default).
 - `ProxyFix` is applied so redirect URIs build correctly behind Azure's reverse proxy.
 - `/healthz` returns `{"status": "ok"}` for Azure's health check / load balancer probes.
-- Grading runs in a background thread per process; only one grading run per assignment can be in flight at a time (a second click while one is running is refused with a message, not queued). Progress is persisted in SQLite, so it survives page refreshes and works correctly even behind multiple `gunicorn` workers.
+- Grading runs in a background thread per process; only one grading run per assignment can be in flight at a time (a second click while one is running is refused with a message, not queued). Progress is persisted in SQLite, so it survives page refreshes and works correctly even behind multiple `gunicorn` workers. If the process running a job dies mid-run (dev-server reload, worker restart), the job is detected as stale after 2 minutes of no progress and the review page tells you to re-run grading rather than spinning forever.
 - `autograder.json` is the original n8n prototype (Google Drive-based) and is kept only for reference.
 - Run with `gunicorn` in production (included in `requirements.txt`), not the Flask dev server: `gunicorn -w 2 -b 0.0.0.0:8000 run:app`.

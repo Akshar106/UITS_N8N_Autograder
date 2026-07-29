@@ -249,3 +249,17 @@ def get_grading_job(course_id, assignment_id):
         (course_id, assignment_id),
     ).fetchone()
     return dict(row) if row else None
+
+
+# A background grading thread dies with its process (dev-server auto-reload,
+# a gunicorn worker recycling/restart, a deploy). When that happens the job
+# row is left at status='running' forever with nothing left to finish it --
+# treat "running" with no progress in a while as dead rather than trusting it.
+STALE_JOB_SECONDS = 120
+
+
+def job_is_stale(job):
+    if not job or job["status"] != "running" or not job["updated_at"]:
+        return False
+    updated_at = datetime.fromisoformat(job["updated_at"])
+    return (datetime.now(timezone.utc) - updated_at).total_seconds() > STALE_JOB_SECONDS

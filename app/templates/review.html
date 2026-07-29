@@ -1,13 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Review - {{ assignment_name }}{% endblock %}
 {% block head_extra %}
-  {% if job and job.status == 'running' %}<meta http-equiv="refresh" content="3">{% endif %}
+  {% if job and job.status == 'running' and not job_stale %}<meta http-equiv="refresh" content="3">{% endif %}
 {% endblock %}
 {% block content %}
   <p><a href="{{ url_for('dashboard.courses') }}">&larr; Back to courses</a></p>
   <h1>Review: {{ assignment_name }}</h1>
 
-  {% if job and job.status == 'running' %}
+  {% if job and job.status == 'running' and job_stale %}
+    <div class="flash flash-error">
+      Grading appears to have stopped unexpectedly (no progress for over two minutes, likely a server restart
+      partway through). It stopped at {{ job.done }} of {{ job.total }} submissions.
+      <a href="{{ url_for('rubric.upload_rubric', course_id=course_id, assignment_id=assignment_id) }}">Go back and click "Grade all submissions" again</a> to pick up where it left off.
+    </div>
+  {% elif job and job.status == 'running' %}
     <div class="flash flash-success">
       Grading in progress: {{ job.done }} of {{ job.total }} submissions done. This page refreshes automatically every few seconds.
     </div>
