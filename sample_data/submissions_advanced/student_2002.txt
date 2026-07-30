@@ -1,0 +1,9 @@
+Q1: A BST is a tree where left children are smaller and right children are bigger than their parent. Searching is O(log n) on average. In the worst case (like a really unbalanced tree from inserting sorted data), it degrades to O(n) because it's basically a linked list at that point.
+
+Q2: Recursion is slower than iteration for Fibonacci because it does a lot of repeated work. I think it's like O(2^n) or something exponential. Iteration is faster.
+
+Q3: Big-O is a way to measure how fast or slow an algorithm is.
+
+Q4: Arrays and linked lists are both ways to store a list of items. Arrays are faster for some things and linked lists are faster for others.
+
+Q5: (no answer -- I ran out of time on this question)

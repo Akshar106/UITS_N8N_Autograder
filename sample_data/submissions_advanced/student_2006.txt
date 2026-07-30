@@ -1,0 +1,9 @@
+Q1: A binary search tree keeps left children smaller than the parent and right children bigger. Searching takes O(log n) on average. The worst case is also O(log n) since the tree just keeps splitting the search space in half no matter what.
+
+Q2: The naive recursive Fibonacci function is O(2^n) because it branches into two recursive calls at every step, recomputing a lot of the same values. The iterative version is O(n) since it just loops once from the bottom up.
+
+Q3: Big-O notation describes the upper bound of an algorithm's running time as the input size n grows toward infinity, so you can classify algorithms by their growth rate. Merge sort is an example of an O(n log n) algorithm since it recursively splits the array and merges the halves back together.
+
+Q4: An array lets you access any element instantly by its index, since the elements are stored one after another in memory. A linked list, on the other hand, has to be walked node by node to reach a given position, so accessing the middle of a long list is much slower than with an array.
+
+Q5: A collision is when two keys produce the same hash and therefore map to the same slot in the table. Separate chaining deals with this by keeping a small list of all the entries that landed on that slot, so you just search within that list when there's more than one item there.

@@ -1,0 +1,9 @@
+Q1: A tree data structure.
+
+Q2: Not sure, recursion calls itself.
+
+Q3: It's about speed.
+
+Q4: Arrays and lists store data.
+
+Q5: I did not have time to study this topic.
