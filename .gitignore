@@ -5,3 +5,4 @@ instance/*.sqlite3
 .venv/
 venv/
 test_grades_output.xlsx
+.DS_Store
