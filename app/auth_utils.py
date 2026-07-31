@@ -15,7 +15,13 @@ class CanvasNotConnected(Exception):
 
 
 def login_required(view):
-    """Requires an IU Login session (the app's front door)."""
+    """Requires an IU Login session (the app's front door).
+
+    NOTE: IU Login authenticates EVERY IU account, students included -- it says
+    who someone is, not that they teach anything. Any route that touches course
+    or grade data must use @canvas_required instead, and must scope its queries
+    to current_user_id().
+    """
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("iu_user_id"):
@@ -23,6 +29,29 @@ def login_required(view):
         return view(*args, **kwargs)
 
     return wrapped
+
+
+def canvas_required(view):
+    """Requires an IU session AND a linked Canvas account.
+
+    The Canvas token is what proves the user is an instructor somewhere: it is
+    issued by Canvas against their own role and is the only thing standing
+    between a route and any IU account holder.
+    """
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("iu_user_id"):
+            return redirect(url_for("auth.index"))
+        if not storage.get_canvas_token(session["iu_user_id"]):
+            raise CanvasNotConnected("Connect your Canvas account to continue.")
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def current_user_id():
+    """The IU Login subject of the signed-in user; the ownership key for all stored data."""
+    return session.get("iu_user_id")
 
 
 def get_valid_access_token():

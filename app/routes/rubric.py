@@ -4,14 +4,18 @@ import threading
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
 from app import canvas_client, extract, grading, storage
-from app.auth_utils import login_required, get_valid_access_token
+from app.auth_utils import canvas_required, current_user_id, get_valid_access_token
 
 rubric_bp = Blueprint("rubric", __name__)
 
 
 @rubric_bp.route("/courses/<course_id>/assignments/<assignment_id>/rubric", methods=["GET", "POST"])
-@login_required
+@canvas_required
 def upload_rubric(course_id, assignment_id):
+    user_id = current_user_id()
+    # Fetching the assignment with this user's own Canvas token is what enforces
+    # that they actually have access to this course: Canvas rejects the call
+    # otherwise, which surfaces as a CanvasAPIError rather than a rubric upload.
     token = get_valid_access_token()
     assignment = canvas_client.get_assignment(token, course_id, assignment_id)
 
@@ -32,13 +36,13 @@ def upload_rubric(course_id, assignment_id):
             return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
         storage.save_rubric(
-            course_id, assignment_id, assignment["name"], rubric_text, file.filename,
+            user_id, course_id, assignment_id, assignment["name"], rubric_text, file.filename,
             canvas_points_possible=assignment.get("points_possible"),
         )
         flash("Rubric uploaded. You can now run grading.", "success")
         return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
-    existing_rubric = storage.get_rubric(course_id, assignment_id)
+    existing_rubric = storage.get_rubric(user_id, course_id, assignment_id)
     return render_template(
         "rubric_upload.html",
         course_id=course_id,
@@ -48,15 +52,16 @@ def upload_rubric(course_id, assignment_id):
 
 
 @rubric_bp.route("/courses/<course_id>/assignments/<assignment_id>/grade", methods=["POST"])
-@login_required
+@canvas_required
 def run_grading(course_id, assignment_id):
+    user_id = current_user_id()
     token = get_valid_access_token()
-    rubric = storage.get_rubric(course_id, assignment_id)
+    rubric = storage.get_rubric(user_id, course_id, assignment_id)
     if not rubric:
         flash("Upload a rubric before running grading.", "error")
         return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
-    existing_job = storage.get_grading_job(course_id, assignment_id)
+    existing_job = storage.get_grading_job(user_id, course_id, assignment_id)
     if existing_job and existing_job["status"] == "running" and not storage.job_is_stale(existing_job):
         flash("Grading is already running for this assignment -- check back shortly.", "error")
         return redirect(url_for("review.review_queue", course_id=course_id, assignment_id=assignment_id))
@@ -70,12 +75,14 @@ def run_grading(course_id, assignment_id):
         if s.get("workflow_state") != "unsubmitted" and s.get("user_id") is not None
     ]
 
-    storage.start_grading_job(course_id, assignment_id, len(gradable))
+    storage.start_grading_job(user_id, course_id, assignment_id, len(gradable))
 
     app = current_app._get_current_object()
+    # user_id is captured here and passed explicitly: the background thread has no
+    # request context, so it cannot read the session to find out who owns this work.
     threading.Thread(
         target=_grade_submissions_job,
-        args=(app, course_id, assignment_id, rubric, gradable, token),
+        args=(app, user_id, course_id, assignment_id, rubric, gradable, token),
         daemon=True,
     ).start()
 
@@ -88,7 +95,7 @@ def run_grading(course_id, assignment_id):
     return redirect(url_for("review.review_queue", course_id=course_id, assignment_id=assignment_id))
 
 
-def _grade_submissions_job(app, course_id, assignment_id, rubric, submissions, access_token):
+def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, submissions, access_token):
     """Runs in a background thread so a large roster can't block/timeout the request.
 
     Each graded submission is written as soon as it's ready, so the review
@@ -98,6 +105,8 @@ def _grade_submissions_job(app, course_id, assignment_id, rubric, submissions, a
         try:
             for submission in submissions:
                 user = submission.get("user") or {}
+                # The student identity always comes from Canvas, never from the LLM's
+                # echoed-back student_id, which could be hallucinated or transposed.
                 student_id = str(submission["user_id"])
                 student_name = user.get("name", f"Student {student_id}")
 
@@ -105,8 +114,9 @@ def _grade_submissions_job(app, course_id, assignment_id, rubric, submissions, a
 
                 if extraction_error:
                     storage.upsert_graded_submission(
-                        course_id, assignment_id, rubric["assignment_name"], student_id, student_name,
-                        submission_filename, None, None, None, None, ai_error=extraction_error,
+                        iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
+                        student_name, submission_filename, None, None, None, None,
+                        ai_error=extraction_error,
                     )
                 else:
                     result = grading.grade_submission(
@@ -115,22 +125,23 @@ def _grade_submissions_job(app, course_id, assignment_id, rubric, submissions, a
                     if result["ok"]:
                         data = result["data"]
                         storage.upsert_graded_submission(
-                            course_id, assignment_id, rubric["assignment_name"], student_id, student_name,
-                            submission_filename,
+                            iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
+                            student_name, submission_filename,
                             data.get("score_awarded"), data.get("total_points"), data.get("overall_feedback"),
                             _dump_breakdown(data.get("per_question_breakdown")),
                         )
                     else:
                         storage.upsert_graded_submission(
-                            course_id, assignment_id, rubric["assignment_name"], student_id, student_name,
-                            submission_filename, None, None, None, None, ai_error=result["error"],
+                            iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
+                            student_name, submission_filename, None, None, None, None,
+                            ai_error=result["error"],
                         )
 
-                storage.increment_grading_progress(course_id, assignment_id)
+                storage.increment_grading_progress(iu_user_id, course_id, assignment_id)
 
-            storage.finish_grading_job(course_id, assignment_id, "done")
+            storage.finish_grading_job(iu_user_id, course_id, assignment_id, "done")
         except Exception as exc:  # noqa: BLE001 -- last-resort guard so the job never hangs at "running" forever
-            storage.finish_grading_job(course_id, assignment_id, "error", str(exc))
+            storage.finish_grading_job(iu_user_id, course_id, assignment_id, "error", str(exc))
 
 
 def _extract_submission_text(submission, access_token):

@@ -11,6 +11,19 @@ class CanvasAPIError(Exception):
     pass
 
 
+def _request(method, url, **kwargs):
+    """requests wrapper that turns network-level failures into CanvasAPIError.
+
+    Without this, a DNS failure, refused connection, TLS error, proxy error or
+    read timeout raises a bare requests exception that no error handler catches,
+    and the user gets a raw 500 instead of the friendly Canvas-unavailable page.
+    """
+    try:
+        return requests.request(method, url, **kwargs)
+    except requests.RequestException as exc:
+        raise CanvasAPIError(f"could not reach Canvas ({type(exc).__name__}): {exc}") from exc
+
+
 def _base_url():
     base = current_app.config["CANVAS_BASE_URL"]
     if not base:
@@ -38,7 +51,8 @@ def build_authorize_url(state):
 
 def exchange_code_for_token(code):
     cfg = current_app.config
-    resp = requests.post(
+    resp = _request(
+        "POST",
         f"{_base_url()}{TOKEN_PATH}",
         data={
             "grant_type": "authorization_code",
@@ -56,7 +70,8 @@ def exchange_code_for_token(code):
 
 def refresh_access_token(refresh_token):
     cfg = current_app.config
-    resp = requests.post(
+    resp = _request(
+        "POST",
         f"{_base_url()}{TOKEN_PATH}",
         data={
             "grant_type": "refresh_token",
@@ -80,7 +95,7 @@ def _get_paginated(access_token, path, params=None):
     url = f"{_base_url()}{path}"
     items = []
     while url:
-        resp = requests.get(url, headers=_auth_headers(access_token), params=params, timeout=20)
+        resp = _request("GET", url, headers=_auth_headers(access_token), params=params, timeout=20)
         if resp.status_code != 200:
             raise CanvasAPIError(f"GET {path} failed ({resp.status_code}): {resp.text}")
         items.extend(resp.json())
@@ -107,7 +122,8 @@ def list_assignments(access_token, course_id):
 
 
 def get_assignment(access_token, course_id, assignment_id):
-    resp = requests.get(
+    resp = _request(
+        "GET",
         f"{_base_url()}/api/v1/courses/{course_id}/assignments/{assignment_id}",
         headers=_auth_headers(access_token),
         timeout=15,
@@ -118,7 +134,8 @@ def get_assignment(access_token, course_id, assignment_id):
 
 
 def get_course(access_token, course_id):
-    resp = requests.get(
+    resp = _request(
+        "GET",
         f"{_base_url()}/api/v1/courses/{course_id}",
         headers=_auth_headers(access_token),
         timeout=15,
@@ -140,7 +157,7 @@ def download_attachment(url, access_token=None):
     # Submission attachment URLs usually embed a verifier token, but pass the
     # bearer token too for instances/files where the verifier is absent.
     headers = _auth_headers(access_token) if access_token else {}
-    resp = requests.get(url, headers=headers, timeout=30)
+    resp = _request("GET", url, headers=headers, timeout=30)
     if resp.status_code != 200:
         raise CanvasAPIError(f"Failed to download submission file ({resp.status_code})")
     return resp.content

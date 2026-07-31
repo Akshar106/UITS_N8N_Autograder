@@ -13,6 +13,10 @@ class Config:
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = APP_ENV == "production"
 
+    # Rubrics are short documents. Without a cap, a single large upload can
+    # exhaust memory on the 1.75 GB Basic B1 instance and take the app down.
+    MAX_CONTENT_LENGTH = int(os.getenv("MAX_UPLOAD_MB", "10")) * 1024 * 1024
+
     IU_OIDC_DISCOVERY_URL = os.getenv("IU_OIDC_DISCOVERY_URL", "")
     IU_OIDC_CLIENT_ID = os.getenv("IU_OIDC_CLIENT_ID")
     IU_OIDC_CLIENT_SECRET = os.getenv("IU_OIDC_CLIENT_SECRET")
