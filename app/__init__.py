@@ -14,6 +14,38 @@ csrf = CSRFProtect()
 logger = logging.getLogger(__name__)
 
 
+def _register_google_site_verification(app):
+    """Serve Google Search Console's googleXXXX.html verification file.
+
+    Search Console verifies ownership by fetching that file from the site root,
+    but Flask serves nothing outside /static, so without this route the check
+    404s and the domain cannot be verified -- which also blocks requesting a
+    Safe Browsing review. Drop the file Google gives you in the project root.
+    """
+    project_root = os.path.dirname(app.root_path)
+    try:
+        names = [
+            n for n in os.listdir(project_root)
+            if n.startswith("google") and n.endswith(".html")
+        ]
+    except OSError:
+        return
+
+    for name in names:
+        try:
+            with open(os.path.join(project_root, name), encoding="utf-8") as fh:
+                body = fh.read()
+        except OSError:
+            continue
+
+        app.add_url_rule(
+            f"/{name}",
+            endpoint=f"google_verify_{name}",
+            view_func=(lambda body=body: (body, 200, {"Content-Type": "text/html; charset=utf-8"})),
+        )
+        logger.info("Serving Google site verification file at /%s", name)
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
@@ -92,6 +124,8 @@ def create_app():
     @app.route("/healthz")
     def healthz():
         return {"status": "ok"}
+
+    _register_google_site_verification(app)
 
     from app.routes.auth import auth_bp
     from app.routes.dashboard import dashboard_bp
