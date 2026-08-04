@@ -28,6 +28,14 @@ class Config:
     CANVAS_REDIRECT_URI = os.getenv("CANVAS_REDIRECT_URI", "http://localhost:8000/oauth/callback")
     CANVAS_OAUTH_SCOPES = os.getenv("CANVAS_OAUTH_SCOPES", "").split()
 
+    # Canvas enrollment roles treated as "may use this tool". IU Login authenticates
+    # every IU account, so this -- not the login itself -- is what keeps students out.
+    # Canvas is the authority on who teaches what, which avoids needing IU's
+    # restricted affiliation scopes. Drop "ta" here to restrict to teachers only.
+    INSTRUCTOR_ENROLLMENT_TYPES = [
+        t.strip() for t in os.getenv("INSTRUCTOR_ENROLLMENT_TYPES", "teacher,ta").split(",") if t.strip()
+    ]
+
     REALLM_API_KEY = os.getenv("REALLM_API_KEY")
     REALLM_URL = os.getenv("REALLM_URL")
     REALLM_MODEL_NAME = os.getenv("REALLM_MODEL_NAME")

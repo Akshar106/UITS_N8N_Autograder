@@ -149,6 +149,27 @@ def oauth_callback():
         return render_template("connect_canvas.html", already_connected=False,
                                error="Canvas connection succeeded but returned no user identity."), 502
 
+    # IU Login authenticates every IU account, students included, so this is the
+    # gate that keeps the tool to instructors: Canvas must say the user holds an
+    # instructor role somewhere. Checked before the token is stored, so a
+    # non-instructor never ends up with a usable Canvas link at all.
+    try:
+        is_instructor = canvas_client.has_instructor_role(
+            token_response["access_token"], current_app.config["INSTRUCTOR_ENROLLMENT_TYPES"]
+        )
+    except canvas_client.CanvasAPIError as exc:
+        return render_template("connect_canvas.html", already_connected=False,
+                               error=f"Could not verify your Canvas role: {exc}"), 502
+
+    if not is_instructor:
+        return render_template(
+            "connect_canvas.html",
+            already_connected=False,
+            error="This tool is available to course instructors. Your Canvas account does not "
+                  "have an instructor role in any course, so it cannot be connected. If you "
+                  "believe this is a mistake, contact the project maintainer.",
+        ), 403
+
     storage.save_canvas_token(
         session["iu_user_id"],
         str(user["id"]),

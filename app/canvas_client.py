@@ -104,17 +104,39 @@ def _get_paginated(access_token, path, params=None):
     return items
 
 
-def list_teaching_courses(access_token):
-    """Courses where the authenticated user is a teacher.
+def list_instructor_courses(access_token, enrollment_types):
+    """Courses where the user holds one of the given instructor-ish roles.
+
+    Canvas accepts a single enrollment_type per request, so query each and merge.
+    Canvas itself is the authority on who teaches what -- this is why the app can
+    tell an instructor from a student without asking IU for restricted
+    affiliation attributes.
 
     Bloomington-only access is expected to be enforced by UITS at the Developer
     Key / account level, not filtered client-side here.
     """
-    return _get_paginated(
-        access_token,
-        "/api/v1/courses",
-        params={"enrollment_type": "teacher", "per_page": 100, "include[]": "term"},
-    )
+    by_id = {}
+    for enrollment_type in enrollment_types:
+        for course in _get_paginated(
+            access_token,
+            "/api/v1/courses",
+            params={"enrollment_type": enrollment_type, "per_page": 100, "include[]": "term"},
+        ):
+            by_id.setdefault(course["id"], course)
+    return list(by_id.values())
+
+
+def has_instructor_role(access_token, enrollment_types):
+    """True if the user holds an instructor role in at least one course."""
+    for enrollment_type in enrollment_types:
+        courses = _get_paginated(
+            access_token,
+            "/api/v1/courses",
+            params={"enrollment_type": enrollment_type, "per_page": 1},
+        )
+        if courses:
+            return True
+    return False
 
 
 def list_assignments(access_token, course_id):

@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, session
+from flask import Blueprint, current_app, render_template, session
 
 from app import canvas_client, storage
 from app.auth_utils import canvas_required, current_user_id, get_valid_access_token
@@ -10,7 +10,9 @@ dashboard_bp = Blueprint("dashboard", __name__)
 @canvas_required
 def courses():
     token = get_valid_access_token()
-    courses_list = canvas_client.list_teaching_courses(token)
+    courses_list = canvas_client.list_instructor_courses(
+        token, current_app.config["INSTRUCTOR_ENROLLMENT_TYPES"]
+    )
     return render_template("dashboard.html", courses=courses_list, user_name=session.get("iu_name"))
 
 
