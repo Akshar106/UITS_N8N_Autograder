@@ -1,7 +1,0 @@
-Assignment: Data Structures Short Answer
-
-Q1 (5 points): What is a hash table, and what is its average-case time complexity for lookup?
-Expected concepts: key-value mapping via a hash function, O(1) average lookup, mentions collisions/handling (chaining or open addressing) for full credit.
-
-Q2 (5 points): Explain the difference between a stack and a queue.
-Expected concepts: stack is LIFO (last-in-first-out), queue is FIFO (first-in-first-out), at least one real example of each.
