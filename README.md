@@ -35,7 +35,14 @@ DATABASE_PATH=instance/autograder.sqlite3
 ```
 
 What each value is:
-- `IU_OIDC_DISCOVERY_URL`, `IU_OIDC_CLIENT_ID`, `IU_OIDC_CLIENT_SECRET` — from the IU Login team once they register this app. Local dev redirect URI is `http://localhost:8000/auth/iu/callback`.
+- `IU_OIDC_CLIENT_ID`, `IU_OIDC_CLIENT_SECRET` — issued by the IU Login team (IMS) after the OIDC Integration Request form is approved. The client ID is one you choose on the form; the secret is sent back securely.
+- `IU_OIDC_DISCOVERY_URL` — IU Login runs on Shibboleth IdP, so these are fixed, not per-app:
+  - pre-production: `https://idp-stg.login.iu.edu/.well-known/openid-configuration`
+  - production: `https://idp.login.iu.edu/.well-known/openid-configuration`
+
+  Test against pre-production first; UITS recommends it. Note IU requires service URLs to be **HTTPS only**, so a `http://localhost` redirect URI generally cannot be registered — plan to test against the deployed HTTPS host.
+
+  Scopes requested are `openid profile email`, all of which are public scopes needing no Data Steward approval. `sub` is used as the per-user ownership key for everything stored in this app; profile/email claims are read from the ID token when present and otherwise fetched from the UserInfo endpoint (Shibboleth typically serves them there), with the UserInfo `sub` checked against the ID token's before being trusted.
 - `CANVAS_BASE_URL`, `CANVAS_CLIENT_ID`, `CANVAS_CLIENT_SECRET` — from the Canvas Developer Key (UITS/Erik). Redirect URI is `http://localhost:8000/oauth/callback`. Note the Dev Key currently lives on the Canvas **Test** instance, not production — confirm the exact domain when you receive credentials.
 - `CANVAS_OAUTH_SCOPES` — space-separated scopes, only needed if the Developer Key enforces scopes.
 - `REALLM_API_KEY`, `REALLM_URL`, `REALLM_MODEL_NAME` — your existing ReaLLM setup.

@@ -57,15 +57,31 @@ def iu_callback():
             error=f"Could not reach IU Login right now ({exc}). Please try again shortly.",
         ), 502
 
-    userinfo = token.get("userinfo") or {}
-    iu_user_id = userinfo.get("sub")
+    # Authlib fills token["userinfo"] from the signed ID token only. IU Login runs
+    # on Shibboleth, which generally puts just the subject in the ID token and
+    # serves the profile/email claims from the UserInfo endpoint, so those have to
+    # be fetched separately or the UI ends up showing an opaque subject id.
+    id_claims = dict(token.get("userinfo") or {})
+    iu_user_id = id_claims.get("sub")
     if not iu_user_id:
         return render_template("login.html", error="IU Login succeeded but returned no user identity."), 502
 
+    claims = id_claims
+    if not id_claims.get("name") or not id_claims.get("email"):
+        try:
+            fetched = dict(oauth.iu.userinfo(token=token) or {})
+        except (OAuthError, *IU_OIDC_NETWORK_ERRORS):
+            fetched = {}  # non-fatal: the ID token already gave us a usable identity
+        # OIDC Core 5.3.2: the UserInfo subject must match the ID token's subject,
+        # otherwise the response belongs to someone else and must not be used.
+        if fetched.get("sub") == iu_user_id:
+            signed = {k: v for k, v in id_claims.items() if v not in (None, "")}
+            claims = {**fetched, **signed}
+
     session.clear()
     session["iu_user_id"] = iu_user_id
-    session["iu_name"] = userinfo.get("name") or userinfo.get("preferred_username") or iu_user_id
-    session["iu_email"] = userinfo.get("email", "")
+    session["iu_name"] = claims.get("name") or claims.get("preferred_username") or iu_user_id
+    session["iu_email"] = claims.get("email", "")
 
     if storage.get_canvas_token(iu_user_id):
         return redirect(url_for("dashboard.courses"))
