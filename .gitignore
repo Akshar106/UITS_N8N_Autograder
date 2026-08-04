@@ -6,3 +6,7 @@ instance/*.sqlite3
 venv/
 test_grades_output.xlsx
 .DS_Store
+
+# Legacy n8n workflow export. Not used by the app, and it embeds a Google Drive
+# folder id plus n8n instance/credential ids that should not be published.
+autograder.json
