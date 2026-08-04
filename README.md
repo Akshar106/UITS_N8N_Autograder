@@ -11,10 +11,30 @@ A Flask app that replaces the earlier n8n/Google Drive prototype (`autograder.js
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
-Fill in `.env`:
+Then create a `.env` file in the repo root (it is gitignored, and is only used for
+local development — on Azure these same names are set as Application Settings instead):
+
+```
+FLASK_SECRET_KEY=
+APP_ENV=development
+IU_OIDC_DISCOVERY_URL=
+IU_OIDC_CLIENT_ID=
+IU_OIDC_CLIENT_SECRET=
+IU_OIDC_REDIRECT_URI=http://localhost:8000/auth/iu/callback
+CANVAS_BASE_URL=https://iu.instructure.com
+CANVAS_CLIENT_ID=
+CANVAS_CLIENT_SECRET=
+CANVAS_REDIRECT_URI=http://localhost:8000/oauth/callback
+CANVAS_OAUTH_SCOPES=
+REALLM_API_KEY=
+REALLM_URL=
+REALLM_MODEL_NAME=
+DATABASE_PATH=instance/autograder.sqlite3
+```
+
+What each value is:
 - `IU_OIDC_DISCOVERY_URL`, `IU_OIDC_CLIENT_ID`, `IU_OIDC_CLIENT_SECRET` — from the IU Login team once they register this app. Local dev redirect URI is `http://localhost:8000/auth/iu/callback`.
 - `CANVAS_BASE_URL`, `CANVAS_CLIENT_ID`, `CANVAS_CLIENT_SECRET` — from the Canvas Developer Key (UITS/Erik). Redirect URI is `http://localhost:8000/oauth/callback`. Note the Dev Key currently lives on the Canvas **Test** instance, not production — confirm the exact domain when you receive credentials.
 - `CANVAS_OAUTH_SCOPES` — space-separated scopes, only needed if the Developer Key enforces scopes.
