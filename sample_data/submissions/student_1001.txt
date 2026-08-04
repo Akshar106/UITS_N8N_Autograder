@@ -1,3 +1,0 @@
-Q1: A hash table stores key-value pairs using a hash function to map keys to array indices. Average-case lookup is O(1), though collisions (handled via chaining or open addressing) can degrade this to O(n) in the worst case.
-
-Q2: A stack is LIFO -- the last item pushed is the first popped, like a stack of plates. A queue is FIFO -- the first item added is the first removed, like a line of people waiting.
