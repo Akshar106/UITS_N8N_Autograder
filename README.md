@@ -40,7 +40,7 @@ What each value is:
   - pre-production: `https://idp-stg.login.iu.edu/.well-known/openid-configuration`
   - production: `https://idp.login.iu.edu/.well-known/openid-configuration`
 
-  Test against pre-production first; UITS recommends it. Note IU requires service URLs to be **HTTPS only**, so a `http://localhost` redirect URI generally cannot be registered — plan to test against the deployed HTTPS host.
+  Test against pre-production first; UITS recommends it, and one OIDC Integration Request form covers both environments. IU requires redirect URIs to be **HTTPS**, but localhost is allowed as long as it is `https://localhost:8000/...` served with a self-signed certificate (see the `USE_HTTPS=1` note below).
 
   Scopes requested are `openid profile email`, all of which are public scopes needing no Data Steward approval. `sub` is used as the per-user ownership key for everything stored in this app; profile/email claims are read from the ID token when present and otherwise fetched from the UserInfo endpoint (Shibboleth typically serves them there), with the UserInfo `sub` checked against the ID token's before being trusted.
 - `CANVAS_BASE_URL`, `CANVAS_CLIENT_ID`, `CANVAS_CLIENT_SECRET` — from the Canvas Developer Key (UITS/Erik). Redirect URI is `http://localhost:8000/oauth/callback`. Note the Dev Key currently lives on the Canvas **Test** instance, not production — confirm the exact domain when you receive credentials.
@@ -90,11 +90,15 @@ Then:
 
 ### What to give the IU Login team
 
-Once this app is deployed (e.g. to Azure), send them:
-- The exact callback URL: `https://<your-deployed-domain>/auth/iu/callback`
-- Ask if a `http://localhost:8000/auth/iu/callback` entry can *also* be registered for local development, so local testing isn't blocked on deployment.
+Registration goes through the **OIDC Integration Request form**. One submission covers both pre-production and production — choose "Pre-production & production" under Environments.
 
-They will send back: an OIDC discovery URL (issuer's `/.well-known/openid-configuration`), a client ID, and a client secret. Drop those into `.env` (or your host's secret store) and the login flow works with no code changes.
+Redirect URIs to register:
+- Deployed: `https://<your-deployed-domain>/auth/iu/callback`
+- Local development: `https://localhost:8000/auth/iu/callback` (must be `https`; run with `USE_HTTPS=1`)
+
+The form also asks for a **Service Owner** — per the IU Login team, this is simply the IU-side contact reachable for maintenance or service-impacting changes — and a **Service Provider**, the technical contact (whoever maintains this app).
+
+You choose the client ID yourself on the form. They send back the client secret securely; the discovery URL is the fixed Shibboleth endpoint listed above. Drop those into `.env` (or Azure Application Settings) and the login flow works with no code changes.
 
 ### What to give UITS (Canvas Developer Key)
 
