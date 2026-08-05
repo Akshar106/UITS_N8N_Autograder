@@ -55,6 +55,20 @@ Run it:
 python3 run.py
 ```
 
+To test the IU Login flow locally you need HTTPS, because IU only accepts HTTPS
+redirect URIs (confirmed with the IU Login team -- localhost is fine, but it must
+be `https://`). Install `cryptography` once, then start the server with TLS:
+
+```bash
+pip install cryptography
+USE_HTTPS=1 python3 run.py
+```
+
+That serves `https://localhost:8000` with a self-signed certificate; accept the
+browser warning once. Register `https://localhost:8000/auth/iu/callback` as a
+development redirect URI on the OIDC Integration Request form, alongside the
+deployed one. Plain `python3 run.py` still serves HTTP for everything else.
+
 Visit `http://localhost:8000`.
 
 **Testing the grading logic on its own**, without any of the above: see `scripts/test_grading.py` and `sample_data/`.
