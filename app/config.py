@@ -20,7 +20,9 @@ class Config:
     IU_OIDC_DISCOVERY_URL = os.getenv("IU_OIDC_DISCOVERY_URL", "")
     IU_OIDC_CLIENT_ID = os.getenv("IU_OIDC_CLIENT_ID")
     IU_OIDC_CLIENT_SECRET = os.getenv("IU_OIDC_CLIENT_SECRET")
-    IU_OIDC_REDIRECT_URI = os.getenv("IU_OIDC_REDIRECT_URI", "http://localhost:8000/auth/iu/callback")
+    # https, not http: IU Login only accepts HTTPS redirect URIs, and this exact
+    # string is what is registered with IMS. Run locally with USE_HTTPS=1.
+    IU_OIDC_REDIRECT_URI = os.getenv("IU_OIDC_REDIRECT_URI", "https://localhost:8000/auth/iu/callback")
 
     CANVAS_BASE_URL = os.getenv("CANVAS_BASE_URL", "").rstrip("/")
     CANVAS_CLIENT_ID = os.getenv("CANVAS_CLIENT_ID")
