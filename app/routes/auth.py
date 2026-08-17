@@ -50,6 +50,14 @@ def iu_callback():
     try:
         token = oauth.iu.authorize_access_token()
     except OAuthError as exc:
+        # Log the full error server-side: the user-facing text is deliberately
+        # short, but diagnosing a failed token exchange needs IU's actual
+        # error code (invalid_client, invalid_grant, ...) and description.
+        current_app.logger.warning(
+            "IU Login token exchange failed: error=%r description=%r uri=%r",
+            getattr(exc, "error", None), getattr(exc, "description", None),
+            getattr(exc, "uri", None),
+        )
         return render_template("login.html", error=f"IU Login failed: {exc.description or exc.error}"), 400
     except IU_OIDC_NETWORK_ERRORS as exc:
         return render_template(
