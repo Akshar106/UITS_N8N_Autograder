@@ -32,6 +32,12 @@ class Config:
     # surfaces as "Client authentication failed" after an otherwise successful login.
     IU_OIDC_TOKEN_AUTH_METHOD = os.getenv("IU_OIDC_TOKEN_AUTH_METHOD", "client_secret_basic")
 
+    # PKCE hardens the code exchange and is normally desirable, but the IdP has to
+    # be provisioned for it. Shibboleth can answer a code_verifier it was not
+    # expecting with an opaque "InvalidEvent", so allow turning it off to isolate
+    # that. Leave enabled unless IU confirms the client is registered without PKCE.
+    IU_OIDC_USE_PKCE = os.getenv("IU_OIDC_USE_PKCE", "1") == "1"
+
     CANVAS_BASE_URL = os.getenv("CANVAS_BASE_URL", "").rstrip("/")
     CANVAS_CLIENT_ID = os.getenv("CANVAS_CLIENT_ID")
     CANVAS_CLIENT_SECRET = os.getenv("CANVAS_CLIENT_SECRET")

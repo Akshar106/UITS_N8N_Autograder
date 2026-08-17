@@ -14,16 +14,19 @@ oauth = OAuth()
 def init_oidc(app):
     oauth.init_app(app)
     if app.config["IU_OIDC_DISCOVERY_URL"] and app.config["IU_OIDC_CLIENT_ID"]:
+        client_kwargs = {
+            "scope": "openid profile email",
+            "token_endpoint_auth_method": app.config["IU_OIDC_TOKEN_AUTH_METHOD"],
+        }
+        if app.config["IU_OIDC_USE_PKCE"]:
+            client_kwargs["code_challenge_method"] = "S256"
+
         oauth.register(
             name="iu",
             client_id=app.config["IU_OIDC_CLIENT_ID"],
             client_secret=app.config["IU_OIDC_CLIENT_SECRET"],
             server_metadata_url=app.config["IU_OIDC_DISCOVERY_URL"],
-            client_kwargs={
-                "scope": "openid profile email",
-                "code_challenge_method": "S256",
-                "token_endpoint_auth_method": app.config["IU_OIDC_TOKEN_AUTH_METHOD"],
-            },
+            client_kwargs=client_kwargs,
         )
 
 
