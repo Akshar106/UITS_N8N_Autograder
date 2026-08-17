@@ -24,6 +24,14 @@ class Config:
     # string is what is registered with IMS. Run locally with USE_HTTPS=1.
     IU_OIDC_REDIRECT_URI = os.getenv("IU_OIDC_REDIRECT_URI", "https://localhost:8000/auth/iu/callback")
 
+    # How the app authenticates itself at the token endpoint. Must match what IMS
+    # configured for this client. client_secret_basic base64-encodes the credentials
+    # in an Authorization header (and URL-encodes them first, per RFC 6749, which can
+    # mismatch servers expecting raw bytes when the secret contains +, /, = or %);
+    # client_secret_post sends them as plain form fields instead. A mismatch here
+    # surfaces as "Client authentication failed" after an otherwise successful login.
+    IU_OIDC_TOKEN_AUTH_METHOD = os.getenv("IU_OIDC_TOKEN_AUTH_METHOD", "client_secret_basic")
+
     CANVAS_BASE_URL = os.getenv("CANVAS_BASE_URL", "").rstrip("/")
     CANVAS_CLIENT_ID = os.getenv("CANVAS_CLIENT_ID")
     CANVAS_CLIENT_SECRET = os.getenv("CANVAS_CLIENT_SECRET")

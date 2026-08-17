@@ -22,6 +22,7 @@ def init_oidc(app):
             client_kwargs={
                 "scope": "openid profile email",
                 "code_challenge_method": "S256",
+                "token_endpoint_auth_method": app.config["IU_OIDC_TOKEN_AUTH_METHOD"],
             },
         )
 
