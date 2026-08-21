@@ -17,9 +17,12 @@ class Config:
     # exhaust memory on the 1.75 GB Basic B1 instance and take the app down.
     MAX_CONTENT_LENGTH = int(os.getenv("MAX_UPLOAD_MB", "10")) * 1024 * 1024
 
-    IU_OIDC_DISCOVERY_URL = os.getenv("IU_OIDC_DISCOVERY_URL", "")
-    IU_OIDC_CLIENT_ID = os.getenv("IU_OIDC_CLIENT_ID")
-    IU_OIDC_CLIENT_SECRET = os.getenv("IU_OIDC_CLIENT_SECRET")
+    # Stripped: credentials pasted into a portal or .env very easily pick up a
+    # trailing space or newline, which fails authentication with an error that
+    # says nothing about whitespace. No legitimate value has leading/trailing space.
+    IU_OIDC_DISCOVERY_URL = os.getenv("IU_OIDC_DISCOVERY_URL", "").strip()
+    IU_OIDC_CLIENT_ID = (os.getenv("IU_OIDC_CLIENT_ID") or "").strip() or None
+    IU_OIDC_CLIENT_SECRET = (os.getenv("IU_OIDC_CLIENT_SECRET") or "").strip() or None
     # https, not http: IU Login only accepts HTTPS redirect URIs, and this exact
     # string is what is registered with IMS. Run locally with USE_HTTPS=1.
     IU_OIDC_REDIRECT_URI = os.getenv("IU_OIDC_REDIRECT_URI", "https://localhost:8000/auth/iu/callback")
