@@ -27,15 +27,12 @@ def index():
 
 @auth_bp.route("/auth/iu/login", methods=["GET", "POST"])
 def iu_login():
-    # POST-only for the actual redirect. Search crawlers issue GETs, so a GET
-    # endpoint that immediately bounces to a university login page reads to
-    # automated phishing classifiers exactly like a credential-harvesting
-    # middleman -- which is what got the deployed URL flagged. Requiring a form
-    # submission keeps crawlers from ever reaching the redirect, and starting a
-    # login is a state-changing action that warrants a POST anyway.
-    if request.method == "GET":
-        return redirect(url_for("auth.index"))
-
+    # Accepts GET as well as POST. Requiring POST kept search crawlers from
+    # reaching the redirect (a GET that bounces to a university login page is
+    # what phishing classifiers score on), but it also silently breaks any
+    # already-loaded or cached page whose button is still a plain link, which
+    # is a bad trade for a mitigation that may not be needed. robots.txt still
+    # asks crawlers away from this path.
     if not iu_configured():
         return render_template(
             "login.html",
