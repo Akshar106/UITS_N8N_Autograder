@@ -64,6 +64,18 @@ def iu_callback():
             getattr(exc, "error", None), getattr(exc, "description", None),
             getattr(exc, "uri", None),
         )
+        # A state mismatch is nearly always a stale or duplicated sign-in rather
+        # than anything wrong: a second click on the login button overwrites the
+        # stored state, the back button replays an old callback, or the flow was
+        # interrupted partway. Authlib's own wording ("CSRF Warning! State not
+        # equal in request and response.") reads as an attack to a faculty member.
+        if getattr(exc, "error", None) == "mismatching_state":
+            return render_template(
+                "login.html",
+                error="That sign-in attempt expired or was interrupted, which usually happens "
+                      "when the login page has been open a while or opened in more than one tab. "
+                      "Please start again from this page.",
+            ), 400
         return render_template("login.html", error=f"IU Login failed: {exc.description or exc.error}"), 400
     except IU_OIDC_NETWORK_ERRORS as exc:
         return render_template(
