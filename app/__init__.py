@@ -125,6 +125,14 @@ def create_app():
     def healthz():
         return {"status": "ok"}
 
+    @app.route("/robots.txt")
+    def robots():
+        # Keep crawlers out of the auth paths. A crawled endpoint that redirects
+        # to a university login page is what phishing classifiers look for, and
+        # none of this is content anyone should be indexing.
+        body = "User-agent: *\nDisallow: /auth/\nDisallow: /oauth/\nDisallow: /courses\n"
+        return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
     _register_google_site_verification(app)
 
     from app.routes.auth import auth_bp

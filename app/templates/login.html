@@ -31,7 +31,10 @@
       Continuing below will take you to IU Login (including a Duo push) on IU's own site.
       This application never asks for, sees, or stores your IU password.
     </p>
-    <a class="btn" href="{{ url_for('auth.iu_login') }}">Continue to IU Login</a>
+    <form method="post" action="{{ url_for('auth.iu_login') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn" type="submit">Continue to IU Login</button>
+    </form>
 
     <p class="muted">
       Questions or feedback about this pilot? Contact akspate@iu.edu.
