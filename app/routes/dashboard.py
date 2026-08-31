@@ -25,4 +25,15 @@ def assignments(course_id):
     assignments_list = canvas_client.list_assignments(token, course_id)
     for a in assignments_list:
         a["_rubric_uploaded"] = storage.get_rubric(user_id, course_id, str(a["id"])) is not None
-    return render_template("assignment.html", course=course, assignments=assignments_list)
+    # An empty list here is indistinguishable from a course that genuinely has no
+    # assignments, and the most common cause is looking at a different course than
+    # the one open in Canvas -- so log what was actually asked for.
+    current_app.logger.info(
+        "Listed %d assignment(s) for Canvas course %s", len(assignments_list), course_id
+    )
+    return render_template(
+        "assignment.html",
+        course=course,
+        assignments=assignments_list,
+        canvas_base_url=current_app.config["CANVAS_BASE_URL"],
+    )

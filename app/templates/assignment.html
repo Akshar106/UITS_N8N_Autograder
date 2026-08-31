@@ -3,8 +3,19 @@
 {% block content %}
   <p><a href="{{ url_for('dashboard.courses') }}">&larr; Back to courses</a></p>
   <h1>{{ course.name }}</h1>
+  <p class="muted">
+    Canvas course ID {{ course.id }}{% if course.course_code %} &middot; {{ course.course_code }}{% endif %}
+    {% if canvas_base_url %}
+      &middot; <a href="{{ canvas_base_url }}/courses/{{ course.id }}/assignments" target="_blank" rel="noopener">open in Canvas</a>
+    {% endif %}
+  </p>
   {% if not assignments %}
-    <p class="muted">No assignments found for this course.</p>
+    <p class="muted">
+      No assignments found for this course. Canvas returned an empty list for course
+      {{ course.id }}. If you are looking at an assignment in Canvas that should appear here,
+      check that the course ID above matches the one in the Canvas URL &mdash; a sandbox
+      course and its refreshed copy can carry the same name but different IDs.
+    </p>
   {% else %}
     <table>
       <thead><tr><th>Assignment</th><th>Due</th><th>Rubric</th><th></th></tr></thead>
