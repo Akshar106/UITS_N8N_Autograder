@@ -20,6 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Set before the first `app` import: Config reads the environment at import time,
+# so importing anything from the package first would bind the real
+# instance/autograder.sqlite3 and these tests would write into it.
+os.environ["DATABASE_PATH"] = os.path.join(tempfile.mkdtemp(), "import-time.sqlite3")
+os.environ.setdefault("FLASK_SECRET_KEY", "test-only")
+
 FAILS = []
 
 OWNER, OTHER = "iu-owner", "iu-other"
@@ -238,12 +244,13 @@ def test_stale_row_prefill():
     """A stale row must not offer the old approved score as the default answer."""
     import re
 
-    os.environ.setdefault("FLASK_SECRET_KEY", "test-only")
-    os.environ["DATABASE_PATH"] = os.path.join(tempfile.mkdtemp(), "prefill.sqlite3")
-
     from app import create_app, storage
 
+    # create_app() reads the import-time path; point it at a file of its own so
+    # this test never sees rows left by the ones above.
     app = create_app()
+    app.config["DATABASE_PATH"] = os.path.join(tempfile.mkdtemp(), "prefill.sqlite3")
+    storage.init_db(app)
 
     def render(rows):
         return app.jinja_env.get_template("review.html").render(
@@ -282,7 +289,7 @@ def test_stale_row_prefill():
         check("stale row prefills the new AI score", score_input(html) == "0.0")
         check("stale row prefills the new AI feedback", "Does not address any question." in feedback_box(html))
         check("the old approved score is not in the input", 'name="faculty_score" value="50.0"' not in html)
-        check("the old score is still shown read-only", "Your earlier review: 50.0" in html)
+        check("the old score is still shown read-only", "Earlier review" in html and ">50.0<" in html)
         check("the old comments are still reachable", "Your earlier comments" in html and "Excellent Work" in html)
         check("the approval is unticked", 'name="approved" checked' not in html)
         check("the database still holds the faculty score", rows_for()[0]["faculty_score"] == 50.0)
@@ -292,7 +299,7 @@ def test_stale_row_prefill():
         html = render(rows_for())
         check("normal row prefills the faculty score", score_input(html) == "42.0")
         check("normal row prefills the faculty feedback", "Solid answer." in feedback_box(html))
-        check("normal row shows no earlier-review notice", "Your earlier review" not in html)
+        check("normal row shows no earlier-review notice", "Earlier review" not in html)
         check("normal row keeps its tick", 'name="approved" checked' in html)
 
         storage.upsert_graded_submission(

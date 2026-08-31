@@ -13,6 +13,10 @@ body {
   line-height: 1.5;
 }
 
+/* The review queue puts seven columns of prose and form fields side by side;
+   1100px squeezes them until the text wraps a word or two per line. */
+body.wide { max-width: 1500px; }
+
 header {
   display: flex;
   justify-content: space-between;
@@ -52,6 +56,38 @@ th {
 .flash-success { background: #e6f4ea; color: #1e4620; }
 .flash-error { background: #fce8e6; color: #611a15; }
 
+/* In-cell notice. A .flash inside a table cell was the cause of the overlapping
+   text: it is a span, so its vertical padding spilled out of the line box and
+   printed on top of the score beneath it. This is a block with tight spacing
+   that stacks properly against its neighbours. */
+.note {
+  display: block;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  margin: 0.4rem 0 0;
+  font-size: 0.85em;
+  line-height: 1.35;
+}
+.note:first-child { margin-top: 0; }
+.note-error { background: #fce8e6; color: #611a15; }
+
+/* Review queue: give each column a share of the width so the two prose columns
+   get the room and the narrow ones stop wrapping mid-word. */
+.review-table { table-layout: fixed; }
+.review-table col.c-student   { width: 10%; }
+.review-table col.c-ai-score  { width: 12%; }
+.review-table col.c-ai-fb     { width: 28%; }
+.review-table col.c-score     { width: 9%; }
+.review-table col.c-final-fb  { width: 26%; }
+.review-table col.c-approved  { width: 7%; }
+.review-table col.c-actions   { width: 8%; }
+.review-table td { word-wrap: break-word; overflow-wrap: break-word; }
+.review-table .score { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.review-table ul { padding-left: 1.1rem; margin: 0.5rem 0 0; }
+.review-table li { margin-bottom: 0.5rem; }
+.review-table textarea { min-height: 7em; }
+.review-table details > summary { cursor: pointer; }
+
 .btn {
   display: inline-block;
   padding: 0.5rem 1rem;
@@ -83,3 +119,8 @@ textarea { min-height: 4em; }
   padding: 1rem 1.5rem;
   margin-bottom: 1rem;
 }
+
+/* Below the width the seven columns need, scroll the table instead of letting
+   it crush every column or push the page sideways. */
+.table-scroll { overflow-x: auto; }
+.table-scroll .review-table { min-width: 1100px; }

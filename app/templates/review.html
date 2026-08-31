@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Review - {{ assignment_name }}{% endblock %}
+{% block body_class %}wide{% endblock %}
 {% block head_extra %}
   {% if job and job.status == 'running' and not job_stale %}<meta http-equiv="refresh" content="3">{% endif %}
 {% endblock %}
@@ -46,7 +47,12 @@
   {% if not submissions %}
     <p class="muted">No graded submissions yet. Run grading from the assignment page first.</p>
   {% else %}
-    <table>
+    <div class="table-scroll">
+    <table class="review-table">
+      <colgroup>
+        <col class="c-student"><col class="c-ai-score"><col class="c-ai-fb">
+        <col class="c-score"><col class="c-final-fb"><col class="c-approved"><col class="c-actions">
+      </colgroup>
       <thead>
         <tr>
           <th>Student</th>
@@ -55,7 +61,7 @@
           <th>Final Score</th>
           <th>Final Feedback</th>
           <th>Approved</th>
-          <th></th>
+          <th>Action</th>
         </tr>
       </thead>
       <tbody>
@@ -67,13 +73,14 @@
               {% if s.submission_attempt %}<br><span class="muted">Attempt {{ s.submission_attempt }}</span>{% endif %}
             </td>
             <td>
-              {% if s.review_stale %}
-                <span class="flash flash-error">Resubmitted or re-scoped since you approved this &mdash; please re-check.</span><br>
-              {% endif %}
+              {# Score first: it is what the column is for. The notice explains it, so it reads underneath. #}
               {% if s.ai_error %}
-                <span class="flash flash-error">{{ s.ai_error }}</span>
+                <span class="note note-error">{{ s.ai_error }}</span>
               {% else %}
-                {{ s.ai_score }} / {{ s.ai_total }}
+                <span class="score">{{ s.ai_score }} / {{ s.ai_total }}</span>
+              {% endif %}
+              {% if s.review_stale %}
+                <span class="note note-error">Resubmitted or re-scoped since you approved this &mdash; please re-check.</span>
               {% endif %}
             </td>
             <td>
@@ -105,7 +112,7 @@
             {% endif %}
             <td>
               {% if s.review_stale and s.faculty_score is not none %}
-                <p class="muted">Your earlier review: {{ s.faculty_score }}</p>
+                <p class="muted">Earlier review<br><span class="score">{{ s.faculty_score }}</span></p>
               {% endif %}
               <input form="{{ form_id }}" type="number" step="0.1" name="faculty_score" value="{{ score_prefill }}">
             </td>
@@ -129,5 +136,6 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   {% endif %}
 {% endblock %}
