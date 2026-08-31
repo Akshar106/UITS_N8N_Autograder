@@ -176,10 +176,29 @@ def list_submissions(access_token, course_id, assignment_id):
 
 
 def download_attachment(url, access_token=None):
-    # Submission attachment URLs usually embed a verifier token, but pass the
-    # bearer token too for instances/files where the verifier is absent.
-    headers = _auth_headers(access_token) if access_token else {}
-    resp = _request("GET", url, headers=headers, timeout=30)
-    if resp.status_code != 200:
-        raise CanvasAPIError(f"Failed to download submission file ({resp.status_code})")
-    return resp.content
+    """Fetch a submission attachment, unauthenticated first.
+
+    Canvas signs attachment URLs with a `verifier` query parameter, so the plain
+    URL is already authorized and needs no Authorization header. Sending one
+    anyway is actively harmful with a scoped Developer Key: file downloads live
+    at /files/:id/download, which is outside the /api/v1 scopes granted to this
+    key, and Canvas rejects an out-of-scope bearer token with 401 -- turning a
+    request that would have succeeded on the verifier alone into a failure.
+
+    The bearer token is kept only as a fallback, for instances or files served
+    without a verifier.
+    """
+    resp = _request("GET", url, timeout=30)
+    if resp.status_code == 200:
+        return resp.content
+
+    if access_token and resp.status_code in (401, 403):
+        retried = _request("GET", url, headers=_auth_headers(access_token), timeout=30)
+        if retried.status_code == 200:
+            return retried.content
+        raise CanvasAPIError(
+            f"Failed to download submission file "
+            f"({resp.status_code} unauthenticated, {retried.status_code} with token)"
+        )
+
+    raise CanvasAPIError(f"Failed to download submission file ({resp.status_code})")
