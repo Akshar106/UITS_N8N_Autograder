@@ -234,10 +234,78 @@ def test_upgrade_from_existing_database():
         check("init_db is idempotent", True)
 
 
+def test_stale_row_prefill():
+    """A stale row must not offer the old approved score as the default answer."""
+    import re
+
+    os.environ.setdefault("FLASK_SECRET_KEY", "test-only")
+    os.environ["DATABASE_PATH"] = os.path.join(tempfile.mkdtemp(), "prefill.sqlite3")
+
+    from app import create_app, storage
+
+    app = create_app()
+
+    def render(rows):
+        return app.jinja_env.get_template("review.html").render(
+            course_id="1", assignment_id="2", assignment_name="DSA", submissions=rows,
+            total_mismatch=None, stale_reviews=sum(1 for r in rows if r["review_stale"]),
+            job=None, job_stale=False, csrf_token=lambda: "x", url_for=lambda *a, **k: "#",
+        )
+
+    def rows_for(student=None):
+        rows = storage.list_submissions("u", "1", "2")
+        if student:
+            rows = [r for r in rows if r["student_id"] == student]
+        for r in rows:
+            r["breakdown"] = []
+        return rows
+
+    def score_input(html):
+        return re.search(r'name="faculty_score" value="([^"]*)"', html).group(1)
+
+    def feedback_box(html):
+        return re.search(r'name="faculty_feedback">(.*?)</textarea>', html, re.S).group(1)
+
+    with app.test_request_context("/"):
+        print("\n-- a stale row starts from the new AI result, not the old approval --")
+        # Approved 50 on attempt 2, then a wrong-exam file arrives as attempt 3.
+        storage.upsert_graded_submission(
+            "u", "1", "2", "DSA", "s1", "Test Student", "good.txt", 50.0, 50.0,
+            "Excellent work.", None, submission_attempt=2, submitted_at="t2")
+        row_id = storage.list_submissions("u", "1", "2")[0]["id"]
+        storage.save_faculty_review("u", row_id, 50.0, "Excellent Work", True)
+        storage.upsert_graded_submission(
+            "u", "1", "2", "DSA", "s1", "Test Student", "rest.txt", 0.0, 50.0,
+            "Does not address any question.", None, submission_attempt=3, submitted_at="t3")
+
+        html = render(rows_for())
+        check("stale row prefills the new AI score", score_input(html) == "0.0")
+        check("stale row prefills the new AI feedback", "Does not address any question." in feedback_box(html))
+        check("the old approved score is not in the input", 'name="faculty_score" value="50.0"' not in html)
+        check("the old score is still shown read-only", "Your earlier review: 50.0" in html)
+        check("the old comments are still reachable", "Your earlier comments" in html and "Excellent Work" in html)
+        check("the approval is unticked", 'name="approved" checked' not in html)
+        check("the database still holds the faculty score", rows_for()[0]["faculty_score"] == 50.0)
+
+        print("\n-- an ordinary reviewed row behaves exactly as before --")
+        storage.save_faculty_review("u", row_id, 42.0, "Solid answer.", True)
+        html = render(rows_for())
+        check("normal row prefills the faculty score", score_input(html) == "42.0")
+        check("normal row prefills the faculty feedback", "Solid answer." in feedback_box(html))
+        check("normal row shows no earlier-review notice", "Your earlier review" not in html)
+        check("normal row keeps its tick", 'name="approved" checked' in html)
+
+        storage.upsert_graded_submission(
+            "u", "1", "2", "DSA", "s2", "Other", "f.txt", 31.0, 50.0, "Partial.", None,
+            submission_attempt=1, submitted_at="t1")
+        check("unreviewed row prefills the AI score", score_input(render(rows_for("s2"))) == "31.0")
+
+
 def main():
     test_review_lifecycle()
     test_canvas_rubric()
     test_upgrade_from_existing_database()
+    test_stale_row_prefill()
 
     print()
     if FAILS:
