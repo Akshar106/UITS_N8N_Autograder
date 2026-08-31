@@ -35,6 +35,7 @@ def review_queue(course_id, assignment_id):
 
     job = storage.get_grading_job(user_id, course_id, assignment_id)
     job_stale = storage.job_is_stale(job)
+    stale_reviews = sum(1 for s in submissions if s["review_stale"])
 
     return render_template(
         "review.html",
@@ -43,6 +44,7 @@ def review_queue(course_id, assignment_id):
         assignment_name=rubric["assignment_name"] if rubric else assignment_id,
         submissions=submissions,
         total_mismatch=total_mismatch,
+        stale_reviews=stale_reviews,
         job=job,
         job_stale=job_stale,
     )

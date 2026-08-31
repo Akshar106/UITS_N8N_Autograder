@@ -31,6 +31,15 @@
     </div>
   {% endif %}
 
+  {% if stale_reviews %}
+    <div class="flash flash-error">
+      {{ stale_reviews }} row{{ 's' if stale_reviews != 1 }} need{{ '' if stale_reviews != 1 else 's' }}
+      re-checking: the submission was replaced, or the rubric changed, after you approved a grade.
+      Your earlier score and comments are still in the row, but the approval was withdrawn so a
+      grade for work you did not review cannot reach the export. Re-check and save each one.
+    </div>
+  {% endif %}
+
   <p class="muted">AI-suggested grades below are drafts only. Edit or approve each row, then export the approved grades to Excel for entry into Canvas.</p>
   <p><a class="btn" href="{{ url_for('export.export_grades', course_id=course_id, assignment_id=assignment_id) }}">Export to Excel</a></p>
 
@@ -53,8 +62,14 @@
         {% for s in submissions %}
           {% set form_id = "review-form-" ~ s.id %}
           <tr>
-            <td>{{ s.student_name }}<br><span class="muted">{{ s.student_id }}</span></td>
             <td>
+              {{ s.student_name }}<br><span class="muted">{{ s.student_id }}</span>
+              {% if s.submission_attempt %}<br><span class="muted">Attempt {{ s.submission_attempt }}</span>{% endif %}
+            </td>
+            <td>
+              {% if s.review_stale %}
+                <span class="flash flash-error">Resubmitted or re-scoped since you approved this &mdash; please re-check.</span><br>
+              {% endif %}
               {% if s.ai_error %}
                 <span class="flash flash-error">{{ s.ai_error }}</span>
               {% else %}

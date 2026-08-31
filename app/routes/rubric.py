@@ -3,10 +3,29 @@ import threading
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
-from app import canvas_client, extract, grading, storage
+from app import canvas_client, canvas_rubric, extract, grading, storage
 from app.auth_utils import canvas_required, current_user_id, get_valid_access_token
 
 rubric_bp = Blueprint("rubric", __name__)
+
+CANVAS_RUBRIC_HEADING = "SCORING RUBRIC (from the Canvas rubric attached to this assignment)"
+NOTES_HEADING = "GRADING NOTES / ANSWER KEY (uploaded by the instructor)"
+
+
+def _combine_rubric_sources(canvas_part, uploaded_text):
+    """Build the rubric text the grader sees from whichever sources exist.
+
+    Canvas supplies the authoritative point split; the uploaded file supplies
+    what actually earns those points. Either alone is usable, and the headings
+    tell the model which is which so it does not treat notes as the scoring
+    scheme or vice versa.
+    """
+    sections = []
+    if canvas_part:
+        sections.append(f"{CANVAS_RUBRIC_HEADING}\n\n{canvas_part['text']}")
+    if uploaded_text:
+        sections.append(f"{NOTES_HEADING}\n\n{uploaded_text}")
+    return "\n\n\n".join(sections)
 
 
 @rubric_bp.route("/courses/<course_id>/assignments/<assignment_id>/rubric", methods=["GET", "POST"])
@@ -18,28 +37,60 @@ def upload_rubric(course_id, assignment_id):
     # otherwise, which surfaces as a CanvasAPIError rather than a rubric upload.
     token = get_valid_access_token()
     assignment = canvas_client.get_assignment(token, course_id, assignment_id)
+    canvas_part = canvas_rubric.from_assignment(assignment)
 
     if request.method == "POST":
         file = request.files.get("rubric_file")
-        if not file or not file.filename:
+        has_file = bool(file and file.filename)
+
+        # With a Canvas rubric attached there is already a usable scoring scheme,
+        # so the upload becomes optional grading notes rather than the whole rubric.
+        if not has_file and not canvas_part:
             flash("Please choose a rubric file to upload.", "error")
             return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
-        try:
-            rubric_text = extract.extract_text(file.filename, file.read())
-        except extract.ExtractionError as exc:
-            flash(str(exc), "error")
-            return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
+        uploaded_text = ""
+        if has_file:
+            try:
+                uploaded_text = extract.extract_text(file.filename, file.read())
+            except extract.ExtractionError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
-        if not rubric_text.strip():
-            flash("Could not find any text in that rubric file.", "error")
-            return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
+            if not uploaded_text.strip():
+                flash("Could not find any text in that file.", "error")
+                return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
-        storage.save_rubric(
-            user_id, course_id, assignment_id, assignment["name"], rubric_text, file.filename,
-            canvas_points_possible=assignment.get("points_possible"),
+        rubric_text = _combine_rubric_sources(canvas_part, uploaded_text.strip())
+        source = "canvas+file" if (canvas_part and has_file) else ("canvas" if canvas_part else "file")
+
+        # Canvas's own rubric total beats the assignment's points_possible: when a
+        # rubric drives the grade they can legitimately differ, and the rubric is
+        # what the grader was given.
+        points_possible = assignment.get("points_possible")
+        if canvas_part and canvas_part["points_possible"] is not None:
+            points_possible = canvas_part["points_possible"]
+
+        rubric_changed = storage.save_rubric(
+            user_id, course_id, assignment_id, assignment["name"], rubric_text,
+            file.filename if has_file else None,
+            canvas_points_possible=points_possible,
+            rubric_source=source,
         )
-        flash("Rubric uploaded. You can now run grading.", "success")
+        flash("Rubric saved. You can now run grading.", "success")
+
+        # Scores approved under the previous rubric were reached against a
+        # different scoring scheme, so they no longer describe how this
+        # assignment is marked.
+        if rubric_changed:
+            expired = storage.mark_reviews_stale(user_id, course_id, assignment_id)
+            if expired:
+                flash(
+                    f"The rubric changed, so {expired} previously approved "
+                    f"{'grade needs' if expired == 1 else 'grades need'} to be re-checked. "
+                    "Your earlier scores and comments are still there, but the approval was withdrawn.",
+                    "error",
+                )
         return redirect(url_for("rubric.upload_rubric", course_id=course_id, assignment_id=assignment_id))
 
     existing_rubric = storage.get_rubric(user_id, course_id, assignment_id)
@@ -48,6 +99,7 @@ def upload_rubric(course_id, assignment_id):
         course_id=course_id,
         assignment=assignment,
         existing_rubric=existing_rubric,
+        canvas_rubric=canvas_part,
     )
 
 
@@ -112,11 +164,19 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
 
                 student_text, submission_filename, extraction_error = _extract_submission_text(submission, access_token)
 
+                # Canvas bumps `attempt` on every resubmission. Storing it is what
+                # lets the next grading run tell "same work, graded again" apart
+                # from "different work in the same row", so an approval granted
+                # for one attempt cannot silently carry over to another.
+                attempt = submission.get("attempt")
+                submitted_at = submission.get("submitted_at")
+
                 if extraction_error:
                     storage.upsert_graded_submission(
                         iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
                         student_name, submission_filename, None, None, None, None,
                         ai_error=extraction_error,
+                        submission_attempt=attempt, submitted_at=submitted_at,
                     )
                 else:
                     result = grading.grade_submission(
@@ -129,12 +189,14 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                             student_name, submission_filename,
                             data.get("score_awarded"), data.get("total_points"), data.get("overall_feedback"),
                             _dump_breakdown(data.get("per_question_breakdown")),
+                            submission_attempt=attempt, submitted_at=submitted_at,
                         )
                     else:
                         storage.upsert_graded_submission(
                             iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
                             student_name, submission_filename, None, None, None, None,
                             ai_error=result["error"],
+                            submission_attempt=attempt, submitted_at=submitted_at,
                         )
 
                 storage.increment_grading_progress(iu_user_id, course_id, assignment_id)

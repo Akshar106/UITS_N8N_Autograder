@@ -16,6 +16,8 @@ COLUMNS = [
     ("Final Score", "final_score"),
     ("Percentage", "percentage"),
     ("Approved", "approved_label"),
+    ("Attempt", "submission_attempt"),
+    ("Needs Re-Review", "stale_label"),
     ("Feedback", "final_feedback"),
 ]
 
@@ -46,6 +48,11 @@ def build_grades_workbook(assignment_name, submissions):
             "final_score": final_score,
             "percentage": percentage,
             "approved_label": "Yes" if s["approved"] else "No",
+            "submission_attempt": s.get("submission_attempt"),
+            # Carried into the sheet as well as the web page: whoever transcribes
+            # these into Canvas may not be the person who ran the grading, and
+            # this is the column that says "do not type this one in yet".
+            "stale_label": "Yes" if s.get("review_stale") else "",
             "final_feedback": final_feedback or s.get("ai_error") or "",
         }
         ws.append([row[key] for _, key in COLUMNS])

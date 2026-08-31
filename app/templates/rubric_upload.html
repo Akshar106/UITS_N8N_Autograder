@@ -4,18 +4,60 @@
   <p><a href="{{ url_for('dashboard.assignments', course_id=course_id) }}">&larr; Back to assignments</a></p>
   <h1>{{ assignment.name }}</h1>
 
+  {% if canvas_rubric %}
+    <div class="card">
+      <h2>Canvas rubric found</h2>
+      <p>
+        This assignment has a rubric attached in Canvas
+        (<strong>{{ canvas_rubric.title }}</strong>{% if canvas_rubric.points_possible is not none %},
+        {{ canvas_rubric.points_possible }} points{% endif %}). It will be used as the scoring
+        scheme, so the point split comes from Canvas rather than from a file.
+      </p>
+      <details>
+        <summary>{{ canvas_rubric.criteria | length }} criteri{{ 'on' if canvas_rubric.criteria | length == 1 else 'a' }}</summary>
+        <ul>
+          {% for c in canvas_rubric.criteria %}
+            <li>
+              <strong>{{ c.description }}</strong>{% if c.points is not none %} — {{ c.points }} points{% endif %}
+              {% if c.long_description %}<br><span class="muted">{{ c.long_description }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+      <p class="muted">
+        A Canvas rubric says how many points each criterion is worth, but not what a correct
+        answer contains. Uploading an answer key below is what lets the grader judge whether an
+        answer is actually right, rather than guessing against the rating labels.
+      </p>
+    </div>
+  {% endif %}
+
   <div class="card">
-    <h2>Rubric</h2>
+    <h2>{{ 'Answer key / grading notes' if canvas_rubric else 'Rubric' }}</h2>
     {% if existing_rubric %}
-      <p>Current rubric: <strong>{{ existing_rubric.rubric_filename }}</strong> (uploaded {{ existing_rubric.uploaded_at }})</p>
+      <p>
+        Current:
+        <strong>{{ existing_rubric.rubric_filename or 'Canvas rubric only' }}</strong>
+        (saved {{ existing_rubric.uploaded_at }})
+        {% if existing_rubric.rubric_source == 'canvas+file' %}
+          <br><span class="muted">Using the Canvas rubric for scoring, plus your uploaded answer key.</span>
+        {% elif existing_rubric.rubric_source == 'canvas' %}
+          <br><span class="muted">Using the Canvas rubric only. No answer key uploaded.</span>
+        {% endif %}
+      </p>
     {% else %}
-      <p class="muted">No rubric uploaded yet.</p>
+      <p class="muted">Nothing saved yet.</p>
     {% endif %}
     <form method="post" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="file" name="rubric_file" accept=".pdf,.docx,.txt" required>
+      <input type="file" name="rubric_file" accept=".pdf,.docx,.txt" {% if not canvas_rubric %}required{% endif %}>
       <br><br>
-      <button class="btn" type="submit">{{ 'Replace rubric' if existing_rubric else 'Upload rubric' }}</button>
+      <button class="btn" type="submit">
+        {% if canvas_rubric %}Save rubric{% else %}{{ 'Replace rubric' if existing_rubric else 'Upload rubric' }}{% endif %}
+      </button>
+      {% if canvas_rubric %}
+        <p class="muted">Optional — leave the file empty to grade against the Canvas rubric alone.</p>
+      {% endif %}
     </form>
   </div>
 

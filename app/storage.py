@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS rubrics (
     assignment_name TEXT,
     rubric_text TEXT NOT NULL,
     rubric_filename TEXT,
+    rubric_source TEXT,
     canvas_points_possible REAL,
     uploaded_at TEXT,
     PRIMARY KEY (iu_user_id, course_id, assignment_id)
@@ -59,12 +60,27 @@ CREATE TABLE IF NOT EXISTS submissions (
     faculty_score REAL,
     faculty_feedback TEXT,
     approved INTEGER NOT NULL DEFAULT 0,
+    submission_attempt INTEGER,
+    submitted_at TEXT,
+    review_stale INTEGER NOT NULL DEFAULT 0,
     graded_at TEXT,
     UNIQUE (iu_user_id, course_id, assignment_id, student_id)
 );
 """
 
 OWNED_TABLES = ("rubrics", "grading_jobs", "submissions")
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
+# existing table untouched, so a database created by an earlier version needs
+# these added explicitly or every query naming them fails.
+ADDED_COLUMNS = {
+    "rubrics": {"rubric_source": "TEXT"},
+    "submissions": {
+        "submission_attempt": "INTEGER",
+        "submitted_at": "TEXT",
+        "review_stale": "INTEGER NOT NULL DEFAULT 0",
+    },
+}
 
 
 def _now():
@@ -108,11 +124,22 @@ def _migrate_pre_ownership_tables(db):
             db.execute(f"ALTER TABLE {table} RENAME TO {table}_preowner_backup")
 
 
+def _add_missing_columns(db):
+    for table, columns in ADDED_COLUMNS.items():
+        existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            continue  # table not created yet; SCHEMA below will include the columns
+        for name, decl in columns.items():
+            if name not in existing:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_db(app):
     with app.app_context():
         db = get_db()
         _migrate_pre_ownership_tables(db)
         db.executescript(SCHEMA)
+        _add_missing_columns(db)
         db.commit()
 
 
@@ -153,24 +180,36 @@ def delete_canvas_token(iu_user_id):
 # --- rubrics -----------------------------------------------------------------
 
 def save_rubric(iu_user_id, course_id, assignment_id, assignment_name, rubric_text,
-                rubric_filename, canvas_points_possible=None):
+                rubric_filename, canvas_points_possible=None, rubric_source=None):
+    """Returns True if this replaced a *different* rubric text than was stored.
+
+    The caller uses that to expire reviews approved under the previous rubric.
+    """
     db = get_db()
+    previous = db.execute(
+        "SELECT rubric_text FROM rubrics WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ?",
+        (iu_user_id, course_id, assignment_id),
+    ).fetchone()
+    replaced_different = previous is not None and previous["rubric_text"] != rubric_text
+
     db.execute(
         """
         INSERT INTO rubrics (iu_user_id, course_id, assignment_id, assignment_name, rubric_text,
-                              rubric_filename, canvas_points_possible, uploaded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                              rubric_filename, rubric_source, canvas_points_possible, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(iu_user_id, course_id, assignment_id) DO UPDATE SET
             assignment_name = excluded.assignment_name,
             rubric_text = excluded.rubric_text,
             rubric_filename = excluded.rubric_filename,
+            rubric_source = excluded.rubric_source,
             canvas_points_possible = excluded.canvas_points_possible,
             uploaded_at = excluded.uploaded_at
         """,
         (iu_user_id, course_id, assignment_id, assignment_name, rubric_text,
-         rubric_filename, canvas_points_possible, _now()),
+         rubric_filename, rubric_source, canvas_points_possible, _now()),
     )
     db.commit()
+    return replaced_different
 
 
 def get_rubric(iu_user_id, course_id, assignment_id):
@@ -184,17 +223,37 @@ def get_rubric(iu_user_id, course_id, assignment_id):
 
 # --- submissions / review queue ----------------------------------------------
 
+# True when Canvas reports a different attempt than the one stored on the row --
+# i.e. this is a new piece of work, not the same work graded again. `IS NOT` is
+# SQLite's null-safe inequality, so a row that predates these columns (NULL
+# attempt) counts as changed rather than silently passing the check.
+_SUBMISSION_CHANGED = """(
+    submissions.submission_attempt IS NOT excluded.submission_attempt
+    OR submissions.submitted_at IS NOT excluded.submitted_at
+)"""
+
+# Only meaningful where a human actually recorded something. Without this every
+# ordinary re-run would flag every untouched row.
+_HAS_REVIEW = """(
+    submissions.approved = 1
+    OR submissions.faculty_score IS NOT NULL
+    OR submissions.faculty_feedback IS NOT NULL
+)"""
+
+
 def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_name, student_id,
                              student_name, submission_filename, ai_score, ai_total, ai_feedback,
-                             ai_breakdown_json, ai_error=None):
+                             ai_breakdown_json, ai_error=None, submission_attempt=None,
+                             submitted_at=None):
     db = get_db()
     db.execute(
-        """
+        f"""
         INSERT INTO submissions (
             iu_user_id, course_id, assignment_id, assignment_name, student_id, student_name,
-            submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error, graded_at
+            submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error,
+            submission_attempt, submitted_at, graded_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(iu_user_id, course_id, assignment_id, student_id) DO UPDATE SET
             assignment_name = excluded.assignment_name,
             student_name = excluded.student_name,
@@ -204,15 +263,28 @@ def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_na
             ai_feedback = excluded.ai_feedback,
             ai_breakdown_json = excluded.ai_breakdown_json,
             ai_error = excluded.ai_error,
-            graded_at = excluded.graded_at
+            graded_at = excluded.graded_at,
+            -- An approval belongs to one specific attempt. When the student
+            -- resubmits, the human decision no longer describes the work in
+            -- front of it, so it must not survive into the Excel export.
+            approved = CASE
+                WHEN {_SUBMISSION_CHANGED} AND {_HAS_REVIEW} THEN 0
+                ELSE submissions.approved END,
+            review_stale = CASE
+                WHEN {_SUBMISSION_CHANGED} AND {_HAS_REVIEW} THEN 1
+                ELSE submissions.review_stale END,
+            submission_attempt = excluded.submission_attempt,
+            submitted_at = excluded.submitted_at
         """,
         (iu_user_id, course_id, assignment_id, assignment_name, student_id, student_name,
-         submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error, _now()),
+         submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error,
+         submission_attempt, submitted_at, _now()),
     )
     db.commit()
-    # NOTE: faculty_score / faculty_feedback / approved are deliberately NOT in the
-    # DO UPDATE list -- re-running grading must never silently discard a faculty
-    # member's own edits or un-approve something they already signed off on.
+    # NOTE: faculty_score / faculty_feedback are deliberately NOT in the DO UPDATE
+    # list -- re-running grading must never discard a faculty member's own words.
+    # `approved` is different: it is a claim about a particular attempt, so it is
+    # withdrawn (not the text, just the sign-off) when that attempt changes.
 
 
 def list_submissions(iu_user_id, course_id, assignment_id):
@@ -238,13 +310,34 @@ def save_faculty_review(iu_user_id, submission_id, faculty_score, faculty_feedba
     cur = db.execute(
         """
         UPDATE submissions
-        SET faculty_score = ?, faculty_feedback = ?, approved = ?
+        SET faculty_score = ?, faculty_feedback = ?, approved = ?, review_stale = 0
         WHERE id = ? AND iu_user_id = ?
         """,
         (faculty_score, faculty_feedback, 1 if approved else 0, submission_id, iu_user_id),
     )
     db.commit()
     return cur.rowcount > 0
+
+
+def mark_reviews_stale(iu_user_id, course_id, assignment_id):
+    """Flag every already-reviewed row for this assignment as needing a re-check.
+
+    Used when the rubric itself changes: the scores a faculty member approved
+    were reached against the old rubric, so they no longer describe how this
+    assignment is being marked, even though nobody resubmitted anything.
+    Returns the number of rows affected.
+    """
+    db = get_db()
+    cur = db.execute(
+        f"""
+        UPDATE submissions
+        SET approved = 0, review_stale = 1
+        WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ? AND {_HAS_REVIEW}
+        """,
+        (iu_user_id, course_id, assignment_id),
+    )
+    db.commit()
+    return cur.rowcount
 
 
 # --- grading jobs (background grading progress) -------------------------------
