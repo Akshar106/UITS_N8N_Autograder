@@ -71,11 +71,19 @@ def upload_rubric(course_id, assignment_id):
         if canvas_part and canvas_part["points_possible"] is not None:
             points_possible = canvas_part["points_possible"]
 
+        # The criteria are stored, not just rendered into the prompt: grading
+        # checks the model's breakdown against them, which is what catches a
+        # silently skipped question.
+        criteria_json = json.dumps(
+            [{"description": c["description"], "points": c["points"]} for c in canvas_part["criteria"]]
+        ) if canvas_part else None
+
         rubric_changed = storage.save_rubric(
             user_id, course_id, assignment_id, assignment["name"], rubric_text,
             file.filename if has_file else None,
             canvas_points_possible=points_possible,
             rubric_source=source,
+            canvas_criteria_json=criteria_json,
         )
         flash("Rubric saved. You can now run grading.", "success")
 
@@ -154,6 +162,11 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
     queue can show partial results while grading is still in progress.
     """
     with app.app_context():
+        # Parsed once, outside the loop: these are what let grading reject a
+        # response that dropped a question or graded out of the wrong total.
+        expected_criteria = json.loads(rubric["canvas_criteria_json"]) if rubric["canvas_criteria_json"] else None
+        expected_total = rubric["canvas_points_possible"]
+
         try:
             for submission in submissions:
                 user = submission.get("user") or {}
@@ -180,7 +193,8 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                     )
                 else:
                     result = grading.grade_submission(
-                        rubric["assignment_name"], rubric["rubric_text"], student_id, student_text
+                        rubric["assignment_name"], rubric["rubric_text"], student_id, student_text,
+                        expected_criteria=expected_criteria, expected_total=expected_total,
                     )
                     if result["ok"]:
                         data = result["data"]

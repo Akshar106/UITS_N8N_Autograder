@@ -71,7 +71,32 @@ deployed one. Plain `python3 run.py` still serves HTTP for everything else.
 
 Visit `http://localhost:8000`.
 
-**Testing the grading logic on its own**, without any of the above: see `scripts/test_grading.py` and `sample_data/`.
+### Tests and evaluation
+
+Everything under `scripts/` runs from the repository root.
+
+| Script | Needs | What it does |
+| --- | --- | --- |
+| `test_grading_guards.py` | nothing | The guards between a model's output and a student's grade: arithmetic recomputed from the breakdown, impossible scores rejected, rubric coverage enforced, retries on malformed responses and flaky API calls, reproducible request settings. |
+| `test_review_integrity.py` | nothing | An approved grade always describes the work it is attached to: approvals expire when a student resubmits or the rubric changes, faculty edits are never destroyed, owner scoping holds, and an older database upgrades in place. |
+| `test_grading.py` | LLM key | Grades the bundled sample submissions and writes an `.xlsx`, so you can eyeball real output without Canvas. |
+| `eval_grading.py` | LLM key | **Measures** the grader: mean error against known scores, run-to-run spread, and bias probes for writing fluency and answer length. |
+
+`eval_grading.py` is the only thing here that answers "how accurate is the
+grading?", so run it before and after any change to the prompt or the model:
+
+```bash
+python3 scripts/eval_grading.py              # accuracy + bias probes
+python3 scripts/eval_grading.py --repeats 3  # also check the score is reproducible
+```
+
+The bundled labels in `sample_data/eval/labels.json` are **estimates, not TA
+grades** — enough to catch a regression, not evidence of accuracy. To claim a
+real accuracy figure, label submissions from a completed assignment with the
+scores a TA actually gave, ideally with two TAs grading independently so you
+also learn what human-to-human agreement looks like. That agreement rate is the
+realistic ceiling; two experienced TAs do not agree with each other 100% of the
+time either.
 
 ### How it works
 

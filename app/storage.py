@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS rubrics (
     rubric_text TEXT NOT NULL,
     rubric_filename TEXT,
     rubric_source TEXT,
+    canvas_criteria_json TEXT,
     canvas_points_possible REAL,
     uploaded_at TEXT,
     PRIMARY KEY (iu_user_id, course_id, assignment_id)
@@ -74,7 +75,7 @@ OWNED_TABLES = ("rubrics", "grading_jobs", "submissions")
 # existing table untouched, so a database created by an earlier version needs
 # these added explicitly or every query naming them fails.
 ADDED_COLUMNS = {
-    "rubrics": {"rubric_source": "TEXT"},
+    "rubrics": {"rubric_source": "TEXT", "canvas_criteria_json": "TEXT"},
     "submissions": {
         "submission_attempt": "INTEGER",
         "submitted_at": "TEXT",
@@ -180,7 +181,8 @@ def delete_canvas_token(iu_user_id):
 # --- rubrics -----------------------------------------------------------------
 
 def save_rubric(iu_user_id, course_id, assignment_id, assignment_name, rubric_text,
-                rubric_filename, canvas_points_possible=None, rubric_source=None):
+                rubric_filename, canvas_points_possible=None, rubric_source=None,
+                canvas_criteria_json=None):
     """Returns True if this replaced a *different* rubric text than was stored.
 
     The caller uses that to expire reviews approved under the previous rubric.
@@ -195,18 +197,20 @@ def save_rubric(iu_user_id, course_id, assignment_id, assignment_name, rubric_te
     db.execute(
         """
         INSERT INTO rubrics (iu_user_id, course_id, assignment_id, assignment_name, rubric_text,
-                              rubric_filename, rubric_source, canvas_points_possible, uploaded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              rubric_filename, rubric_source, canvas_criteria_json,
+                              canvas_points_possible, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(iu_user_id, course_id, assignment_id) DO UPDATE SET
             assignment_name = excluded.assignment_name,
             rubric_text = excluded.rubric_text,
             rubric_filename = excluded.rubric_filename,
             rubric_source = excluded.rubric_source,
+            canvas_criteria_json = excluded.canvas_criteria_json,
             canvas_points_possible = excluded.canvas_points_possible,
             uploaded_at = excluded.uploaded_at
         """,
         (iu_user_id, course_id, assignment_id, assignment_name, rubric_text,
-         rubric_filename, rubric_source, canvas_points_possible, _now()),
+         rubric_filename, rubric_source, canvas_criteria_json, canvas_points_possible, _now()),
     )
     db.commit()
     return replaced_different
