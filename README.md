@@ -77,6 +77,7 @@ Everything under `scripts/` runs from the repository root.
 
 | Script | Needs | What it does |
 | --- | --- | --- |
+| `test_extraction.py` | nothing (plus `reportlab` for the PDF checks) | Builds real .docx/.pdf/.txt files and confirms each is read *completely* — tables, text boxes, equations, hyperlinks, encodings — or reported as incomplete rather than graded. |
 | `test_grading_guards.py` | nothing | The guards between a model's output and a student's grade: arithmetic recomputed from the breakdown, impossible scores rejected, rubric coverage enforced, retries on malformed responses and flaky API calls, reproducible request settings. |
 | `test_review_integrity.py` | nothing | An approved grade always describes the work it is attached to: approvals expire when a student resubmits or the rubric changes, faculty edits are never destroyed, owner scoping holds, and an older database upgrades in place. |
 | `test_grading.py` | LLM key | Grades the bundled sample submissions and writes an `.xlsx`, so you can eyeball real output without Canvas. |
@@ -109,6 +110,10 @@ Then:
 
 3. **Courses/assignments** are pulled live from the Canvas API (read-only) using the connected Canvas token.
 4. **Rubric upload** accepts PDF/DOCX/TXT, extracts the text, and stores it per assignment.
+
+   **Extraction** (`app/extract.py`) reads `.pdf`, `.docx` and `.txt`, and its second job is knowing when it missed something. A `.docx` is walked in document order so paragraphs, tables (nested included), text boxes, equations, hyperlinks and content controls all come through where they belong — a student who answers inside a table used to extract as their name alone and score a confident zero. `.pdf` uses pdfplumber for reading order and columns. `.txt` detects its encoding rather than assuming UTF-8, so a cp1252 or UTF-16 file is not read as gibberish. Anything else is refused by name with advice the student can act on ("Save As a .docx and resubmit"), never a stack trace.
+
+   Critically, extraction distinguishes **"the student wrote very little"** (grade it — it should score accordingly) from **"we failed to read the file"** (refuse it). A document holding images or diagrams but almost no text is not graded at all, because an invented zero on correct work is the worst thing this pipeline can produce and it looks entirely plausible. Softer warnings — images alongside readable text, an odd encoding, a table whose order may be off — are attached to the row, shown in the review queue, carried into the Excel export, and force the row to the top of the attention queue.
 5. **Grading** runs in a background thread (started when you click "Grade all submissions," not blocking the request) — downloads each submission (file upload or text-entry, all attachments if there's more than one), sends rubric + submission text to the LLM with a strict grading prompt, and stores each result (score, per-question breakdown, feedback) as soon as it's ready. The review page shows live progress and refreshes automatically until grading finishes.
 6. **Review** lets faculty see the AI's score/feedback per student, override either field, and mark it approved. If the AI's computed total doesn't match the assignment's actual Canvas points total, a warning banner flags it before anything gets entered into Canvas. Three things shape this page:
    - **Evidence.** Every per-question award quotes the student's own words, and the app checks that quote is really in the submission. A quote it can't find is shown in red — that's the one place a fabricated award becomes visible.

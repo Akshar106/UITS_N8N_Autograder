@@ -1,0 +1,355 @@
+#!/usr/bin/env python3
+"""Checks that a submitted file is read completely -- or reported as incomplete.
+
+Builds real .docx, .pdf and .txt files in memory and runs them through the same
+extractor the grading job uses. No network, no API key:
+
+    python3 scripts/test_extraction.py
+
+The case that motivates all of this: a student who answers inside a Word table
+used to extract as their name alone, get graded, and score zero with a confident
+justification. Nothing anywhere said extraction had failed. Every check here
+exists to make sure that class of silent wrong grade cannot happen again.
+"""
+import io
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from docx import Document  # noqa: E402
+from docx.shared import Inches  # noqa: E402
+
+from app import extract  # noqa: E402
+
+FAILS = []
+
+ANSWER_1 = "A BST keeps left subtree values smaller than the node. Average case O(log n)."
+ANSWER_2 = "Naive recursion is O(2^n) because it recomputes overlapping subproblems."
+
+
+def check(label, condition):
+    print(("PASS  " if condition else "FAIL  ") + label)
+    if not condition:
+        FAILS.append(label)
+
+
+def docx_bytes(build):
+    document = Document()
+    build(document)
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def read(filename, content):
+    return extract.extract_document(filename, content)
+
+
+# --- .docx --------------------------------------------------------------------
+
+def test_docx_tables():
+    print("\n-- answers inside a Word table (the silent-zero bug) --")
+
+    def build(d):
+        d.add_paragraph("Name: Jordan Lee")
+        table = d.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "Q1"
+        table.cell(0, 1).text = ANSWER_1
+        table.cell(1, 0).text = "Q2"
+        table.cell(1, 1).text = ANSWER_2
+
+    result = read("table.docx", docx_bytes(build))
+    check("a table answer is recovered", ANSWER_1 in result.text and ANSWER_2 in result.text)
+    check("the question labels come with it", "Q1" in result.text and "Q2" in result.text)
+    check("the table was counted", result.stats["tables"] == 1)
+    # A short answer laid out in a table is a short answer, not a read failure.
+    check("a fully-read table is not flagged incomplete", not result.looks_incomplete)
+
+    def build_nested(d):
+        outer = d.add_table(rows=1, cols=1)
+        inner = outer.cell(0, 0).add_table(rows=1, cols=1)
+        inner.cell(0, 0).text = ANSWER_1
+
+    nested = read("nested.docx", docx_bytes(build_nested))
+    check("a table nested inside a table is recovered", ANSWER_1 in nested.text)
+
+
+def test_docx_reading_order():
+    print("\n-- document order is preserved --")
+
+    def build(d):
+        d.add_paragraph("Q1 answer follows.")
+        t1 = d.add_table(rows=1, cols=1)
+        t1.cell(0, 0).text = ANSWER_1
+        d.add_paragraph("Q2 answer follows.")
+        t2 = d.add_table(rows=1, cols=1)
+        t2.cell(0, 0).text = ANSWER_2
+
+    text = read("order.docx", docx_bytes(build)).text
+    positions = [text.index(s) for s in
+                 ("Q1 answer follows", ANSWER_1, "Q2 answer follows", ANSWER_2)]
+    check("paragraphs and tables interleave in document order",
+          positions == sorted(positions))
+
+
+def test_docx_other_containers():
+    print("\n-- text boxes, equations, hyperlinks, list items --")
+
+    def build_list(d):
+        d.add_paragraph(ANSWER_1, style="List Bullet")
+        d.add_paragraph(ANSWER_2, style="List Number")
+
+    listed = read("list.docx", docx_bytes(build_list))
+    check("bulleted and numbered answers are read",
+          ANSWER_1 in listed.text and ANSWER_2 in listed.text)
+
+    # A hyperlink's label lives in a w:hyperlink run, which paragraph.text drops.
+    def build_link(d):
+        p = d.add_paragraph("See ")
+        run = p.add_run()
+        link = run._element.makeelement(
+            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink", {})
+        inner_run = run._element.makeelement(
+            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r", {})
+        text_el = run._element.makeelement(
+            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t", {})
+        text_el.text = "merge sort is O(n log n)"
+        inner_run.append(text_el)
+        link.append(inner_run)
+        p._p.append(link)
+
+    linked = read("link.docx", docx_bytes(build_link))
+    check("hyperlink text is read", "merge sort is O(n log n)" in linked.text)
+
+    # An equation-editor formula: <m:oMath><m:r><m:t>O(n log n)</m:t>
+    def build_math(d):
+        p = d.add_paragraph("Complexity: ")
+        omath = p._p.makeelement(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/math}oMath", {})
+        m_r = p._p.makeelement(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/math}r", {})
+        m_t = p._p.makeelement(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/math}t", {})
+        m_t.text = "O(n log n)"
+        m_r.append(m_t)
+        omath.append(m_r)
+        p._p.append(omath)
+
+    math = read("math.docx", docx_bytes(build_math))
+    check("equation-editor text is read", "O(n log n)" in math.text)
+    check("equations are counted", math.stats["equations"] == 1)
+    check("a note warns that notation may be imprecise",
+          any("equation" in n for n in math.notes))
+
+
+def test_docx_incomplete_detection():
+    print("\n-- an unreadable document is refused, not graded --")
+
+    # A picture of the answers plus a name: the exact shape of a submission that
+    # would otherwise score a confident zero.
+    png = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08"
+           b"\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00"
+           b"\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+    def build(d):
+        d.add_paragraph("Name: Jordan Lee")
+        d.add_picture(io.BytesIO(png), width=Inches(1))
+
+    result = read("scan.docx", docx_bytes(build))
+    check("the image is counted", result.stats["images"] == 1)
+    check("an image-only document is flagged incomplete", result.looks_incomplete)
+    check("a note names the images", any("image" in n for n in result.notes))
+
+    # The other side of that judgment: a genuinely short answer, no images, must
+    # still be graded so it can score what it deserves.
+    short = read("short.docx", docx_bytes(lambda d: d.add_paragraph("Q1: A tree.")))
+    check("a genuinely short answer is NOT flagged incomplete", not short.looks_incomplete)
+    check("the short answer's text is intact", "A tree" in short.text)
+
+    def build_empty(d):
+        d.add_paragraph("")
+
+    try:
+        read("empty.docx", docx_bytes(build_empty))
+        check("an empty document raises", False)
+    except extract.ExtractionError:
+        check("an empty document raises", True)
+
+    try:
+        read("broken.docx", b"this is not a docx at all")
+        check("a corrupt docx raises a readable error", False)
+    except extract.ExtractionError as exc:
+        check("a corrupt docx raises a readable error", "could not be opened" in str(exc))
+
+
+def test_docx_header_fallback():
+    print("\n-- header/footer used only as a fallback --")
+
+    def build_normal(d):
+        d.add_paragraph(ANSWER_1)
+        d.add_paragraph(ANSWER_2)
+        d.sections[0].header.paragraphs[0].text = "Jordan Lee - CSCI 101"
+
+    normal = read("hdr.docx", docx_bytes(build_normal))
+    check("a normal document does not pull in header noise",
+          "CSCI 101" not in normal.text)
+
+    def build_body_in_header(d):
+        d.add_paragraph("Name")
+        d.sections[0].header.paragraphs[0].text = ANSWER_1
+
+    fallback = read("hdr2.docx", docx_bytes(build_body_in_header))
+    check("a nearly empty body falls back to the header", ANSWER_1 in fallback.text)
+    check("the fallback is noted", any("header" in n.lower() for n in fallback.notes))
+
+
+# --- .pdf ---------------------------------------------------------------------
+
+def pdf_bytes(lines):
+    """A minimal single-page PDF with a real text layer."""
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.pdfgen import canvas as pdf_canvas
+
+    buffer = io.BytesIO()
+    c = pdf_canvas.Canvas(buffer, pagesize=LETTER)
+    y = 720
+    for line in lines:
+        c.drawString(72, y, line)
+        y -= 18
+    c.save()
+    return buffer.getvalue()
+
+
+def test_pdf():
+    print("\n-- .pdf --")
+    try:
+        import reportlab  # noqa: F401
+    except ImportError:
+        print("SKIP  reportlab not installed; install it to test PDF extraction")
+        return
+
+    result = read("answers.pdf", pdf_bytes([f"Q1: {ANSWER_1}", f"Q2: {ANSWER_2}"]))
+    check("pdf text is extracted", ANSWER_1 in result.text and ANSWER_2 in result.text)
+    check("the page count is recorded", result.stats["pages"] == 1)
+    check("a normal pdf is not flagged incomplete", not result.looks_incomplete)
+
+    multi = read("multi.pdf", pdf_bytes([f"Q{i}: line {i}" for i in range(1, 30)]))
+    check("every line of a longer pdf is read",
+          all(f"line {i}" in multi.text for i in range(1, 30)))
+
+    try:
+        read("broken.pdf", b"%PDF-1.4 truncated garbage")
+        check("a corrupt pdf raises a readable error", False)
+    except extract.ExtractionError as exc:
+        check("a corrupt pdf raises a readable error", "could not be read" in str(exc))
+
+
+# --- .txt ---------------------------------------------------------------------
+
+def test_txt_encodings():
+    print("\n-- .txt encodings --")
+
+    plain = read("a.txt", ANSWER_1.encode("utf-8"))
+    check("utf-8 is read", plain.text == ANSWER_1)
+    check("the encoding is recorded", plain.stats["encoding"] == "utf-8")
+
+    bom = read("b.txt", b"\xef\xbb\xbf" + ANSWER_1.encode("utf-8"))
+    check("a utf-8 BOM is stripped, not read as a character",
+          bom.text == ANSWER_1 and "﻿" not in bom.text)
+
+    utf16 = read("c.txt", ANSWER_1.encode("utf-16"))
+    check("utf-16 (Word's 'save as plain text') is read", utf16.text == ANSWER_1)
+
+    # cp1252 smart quotes -- what Word produces, and not valid UTF-8.
+    # cp1252 bytes directly: 0x93/0x94 are smart quotes, 0x96 an en dash.
+    windows = b"Q1: the tree is \x93degenerate\x94 \x96 O(n)."
+    cp = read("d.txt", windows)
+    check("a cp1252 file is decoded rather than mangled",
+          "degenerate" in cp.text and "�" not in cp.text)
+    check("the non-utf-8 encoding is noted", any("UTF-8" in n for n in cp.notes))
+
+    try:
+        read("e.txt", b"")
+        check("an empty file raises", False)
+    except extract.ExtractionError:
+        check("an empty file raises", True)
+
+
+# --- refusals and text entry ---------------------------------------------------
+
+def test_refusals():
+    print("\n-- unsupported formats are refused by name --")
+
+    for ext, expected in (("doc", "Save As"), ("png", "Images cannot be read"),
+                          ("zip", "Archives cannot be read"), ("pages", "Export To")):
+        try:
+            read(f"x.{ext}", b"content")
+            check(f".{ext} is refused", False)
+        except extract.ExtractionError as exc:
+            check(f".{ext} is refused with actionable advice", expected in str(exc))
+
+    try:
+        read("x.xyz", b"content")
+        check("an unknown extension names the accepted formats", False)
+    except extract.ExtractionError as exc:
+        check("an unknown extension names the accepted formats", ".pdf, .docx and .txt" in str(exc))
+
+    try:
+        read("noextension", b"content")
+        check("a file with no extension is refused", False)
+    except extract.ExtractionError:
+        check("a file with no extension is refused", True)
+
+
+def test_text_entry():
+    print("\n-- Canvas text-entry HTML --")
+
+    check("paragraphs stay separated",
+          extract.strip_html("<p>Q1: first</p><p>Q2: second</p>") == "Q1: first\n\nQ2: second")
+    check("list items stay separated",
+          extract.strip_html("<ul><li>one</li><li>two</li></ul>") == "one\n\ntwo")
+    check("line breaks survive", "\n" in extract.strip_html("a<br>b"))
+    check("entities are decoded", extract.strip_html("<p>a &lt; b &amp; c</p>") == "a < b & c")
+    check("table cells are separated",
+          "|" in extract.strip_html("<table><tr><td>Q1</td><td>answer</td></tr></table>"))
+    check("script content is dropped",
+          "alert" not in extract.strip_html("<script>alert(1)</script><p>real</p>"))
+    check("empty html is empty", extract.strip_html("") == "")
+    check("None is handled", extract.strip_html(None) == "")
+
+
+def test_rubric_files_still_read():
+    print("\n-- the bundled sample data still reads --")
+    root = Path(__file__).resolve().parent.parent
+    for relative in ("sample_data/rubric_advanced.txt",
+                     "sample_data/submissions_advanced/student_2001.txt"):
+        path = root / relative
+        result = read(path.name, path.read_bytes())
+        check(f"{relative} reads", result.chars > 100 and not result.looks_incomplete)
+
+
+def main():
+    test_docx_tables()
+    test_docx_reading_order()
+    test_docx_other_containers()
+    test_docx_incomplete_detection()
+    test_docx_header_fallback()
+    test_pdf()
+    test_txt_encodings()
+    test_refusals()
+    test_text_entry()
+    test_rubric_files_still_read()
+
+    print()
+    if FAILS:
+        print(f"{len(FAILS)} failure(s):")
+        for f in FAILS:
+            print(f"  - {f}")
+        return 1
+    print("ALL CHECKS PASSED")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

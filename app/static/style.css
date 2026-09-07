@@ -70,6 +70,8 @@ th {
 }
 .note:first-child { margin-top: 0; }
 .note-error { background: #fce8e6; color: #611a15; }
+/* Amber, not red: the grade is usable but the file was not read completely. */
+.note-warn  { background: #fef7e0; color: #5c4400; }
 
 /* Confidence badge. Only medium/low are shown per question -- "high" on every
    row of a 200-row table is noise, so its absence carries the meaning. */

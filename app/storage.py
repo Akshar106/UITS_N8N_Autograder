@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     ai_breakdown_json TEXT,
     ai_confidence TEXT,
     ai_error TEXT,
+    extraction_notes TEXT,
     faculty_score REAL,
     faculty_feedback TEXT,
     approved INTEGER NOT NULL DEFAULT 0,
@@ -82,6 +83,7 @@ ADDED_COLUMNS = {
         "submitted_at": "TEXT",
         "review_stale": "INTEGER NOT NULL DEFAULT 0",
         "ai_confidence": "TEXT",
+        "extraction_notes": "TEXT",
     },
 }
 
@@ -250,16 +252,17 @@ _HAS_REVIEW = """(
 def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_name, student_id,
                              student_name, submission_filename, ai_score, ai_total, ai_feedback,
                              ai_breakdown_json, ai_error=None, ai_confidence=None,
-                             submission_attempt=None, submitted_at=None):
+                             extraction_notes=None, submission_attempt=None,
+                             submitted_at=None):
     db = get_db()
     db.execute(
         f"""
         INSERT INTO submissions (
             iu_user_id, course_id, assignment_id, assignment_name, student_id, student_name,
             submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error,
-            ai_confidence, submission_attempt, submitted_at, graded_at
+            ai_confidence, extraction_notes, submission_attempt, submitted_at, graded_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(iu_user_id, course_id, assignment_id, student_id) DO UPDATE SET
             assignment_name = excluded.assignment_name,
             student_name = excluded.student_name,
@@ -270,6 +273,7 @@ def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_na
             ai_breakdown_json = excluded.ai_breakdown_json,
             ai_error = excluded.ai_error,
             ai_confidence = excluded.ai_confidence,
+            extraction_notes = excluded.extraction_notes,
             graded_at = excluded.graded_at,
             -- An approval belongs to one specific attempt. When the student
             -- resubmits, the human decision no longer describes the work in
@@ -285,7 +289,7 @@ def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_na
         """,
         (iu_user_id, course_id, assignment_id, assignment_name, student_id, student_name,
          submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error,
-         ai_confidence, submission_attempt, submitted_at, _now()),
+         ai_confidence, extraction_notes, submission_attempt, submitted_at, _now()),
     )
     db.commit()
     # NOTE: faculty_score / faculty_feedback are deliberately NOT in the DO UPDATE

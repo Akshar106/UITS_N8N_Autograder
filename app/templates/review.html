@@ -103,6 +103,14 @@
               {% if s.review_stale %}
                 <span class="note note-error">Resubmitted or re-scoped since you approved this &mdash; please re-check.</span>
               {% endif %}
+              {% if s.notes %}
+                {# How well the file was read, not what the answer was worth. A
+                   grade computed from half a document should never look as solid
+                   as one computed from all of it. #}
+                <span class="note note-warn">
+                  {% for note in s.notes %}{{ note }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+                </span>
+              {% endif %}
               {% if s.unverified_quotes %}
                 <span class="note note-error">
                   {{ s.unverified_quotes }} quote{{ 's' if s.unverified_quotes != 1 }} could not be

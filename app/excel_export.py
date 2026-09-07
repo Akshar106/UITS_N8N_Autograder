@@ -19,6 +19,7 @@ COLUMNS = [
     ("AI Confidence", "ai_confidence"),
     ("Attempt", "submission_attempt"),
     ("Needs Re-Review", "stale_label"),
+    ("Extraction Warnings", "extraction_notes"),
     ("Feedback", "final_feedback"),
 ]
 
@@ -55,6 +56,7 @@ def build_grades_workbook(assignment_name, submissions):
             # these into Canvas may not be the person who ran the grading, and
             # this is the column that says "do not type this one in yet".
             "stale_label": "Yes" if s.get("review_stale") else "",
+            "extraction_notes": s.get("extraction_notes") or "",
             "final_feedback": final_feedback or s.get("ai_error") or "",
         }
         ws.append([row[key] for _, key in COLUMNS])

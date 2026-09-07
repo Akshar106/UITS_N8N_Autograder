@@ -23,6 +23,10 @@ def _attention_bucket(submission):
         return "error"
     if submission["review_stale"]:
         return "stale"
+    # A grade based on a file we only partly read needs a human eye whatever the
+    # model thought of its own certainty.
+    if submission["extraction_notes"]:
+        return "low"
     return submission["ai_confidence"] or "medium"
 
 
@@ -43,6 +47,7 @@ def review_queue(course_id, assignment_id):
         s["breakdown"] = json.loads(s["ai_breakdown_json"]) if s["ai_breakdown_json"] else []
         s["attention"] = _attention_bucket(s)
         s["unverified_quotes"] = sum(1 for q in s["breakdown"] if q.get("evidence_verified") is False)
+        s["notes"] = [n for n in (s["extraction_notes"] or "").split("\n") if n.strip()]
 
     # storage returns them by name; re-order unless the faculty member asked for
     # the roster order instead (handy when entering grades into Canvas).

@@ -188,7 +188,9 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                 student_id = str(submission["user_id"])
                 student_name = user.get("name", f"Student {student_id}")
 
-                student_text, submission_filename, extraction_error = _extract_submission_text(submission, access_token)
+                student_text, submission_filename, extraction_error, extraction_notes = \
+                    _extract_submission_text(submission, access_token)
+                notes_text = "\n".join(extraction_notes) or None
 
                 # Canvas bumps `attempt` on every resubmission. Storing it is what
                 # lets the next grading run tell "same work, graded again" apart
@@ -201,7 +203,7 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                     storage.upsert_graded_submission(
                         iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
                         student_name, submission_filename, None, None, None, None,
-                        ai_error=extraction_error,
+                        ai_error=extraction_error, extraction_notes=notes_text,
                         submission_attempt=attempt, submitted_at=submitted_at,
                     )
                 else:
@@ -218,13 +220,14 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                             data.get("score_awarded"), data.get("total_points"), data.get("overall_feedback"),
                             _dump_breakdown(data.get("per_question_breakdown")),
                             ai_confidence=data.get("confidence"),
+                            extraction_notes=notes_text,
                             submission_attempt=attempt, submitted_at=submitted_at,
                         )
                     else:
                         storage.upsert_graded_submission(
                             iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
                             student_name, submission_filename, None, None, None, None,
-                            ai_error=result["error"],
+                            ai_error=result["error"], extraction_notes=notes_text,
                             submission_attempt=attempt, submitted_at=submitted_at,
                         )
 
@@ -252,7 +255,7 @@ def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, ac
         submission = by_student.get(str(row["student_id"]))
         if submission is None:
             continue  # graded earlier but no longer in this fetch
-        text, _filename, error = _extract_submission_text(submission, access_token)
+        text, _filename, error, _notes = _extract_submission_text(submission, access_token)
         if error or not text:
             continue
         candidates.append({
@@ -265,40 +268,57 @@ def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, ac
 
 
 def _extract_submission_text(submission, access_token):
+    """Return (text, filenames, error, notes) for one Canvas submission.
+
+    notes are warnings about *how well* the file was read -- images that could
+    not be looked at, a table whose ordering may be off, a non-UTF-8 encoding.
+    They are not failures, but they are the difference between a faculty member
+    trusting a score and knowing to open the file first.
+    """
     attachments = submission.get("attachments") or []
     if attachments:
         # Students can upload more than one file (e.g. code + a writeup); grade
         # all of them by concatenating their text, not just the first.
-        parts = []
-        notes = []
-        filenames = []
+        parts, problems, notes, filenames = [], [], [], []
+        incomplete = False
+
         for attachment in attachments:
             filename = attachment.get("filename", "file")
             try:
                 content = canvas_client.download_attachment(attachment["url"], access_token)
-                text = extract.extract_text(filename, content)
+                document = extract.extract_document(filename, content)
             except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
-                notes.append(f"[Could not read {filename}: {exc}]")
+                problems.append(f"[Could not read {filename}: {exc}]")
                 continue
-            if not text.strip():
-                notes.append(f"[No text could be extracted from {filename} (scanned/image-only?)]")
-                continue
+
             filenames.append(filename)
-            parts.append(f"--- {filename} ---\n{text}")
+            parts.append(f"--- {filename} ---\n{document.text}")
+            notes.extend(f"{filename}: {note}" for note in document.notes)
+            incomplete = incomplete or document.looks_incomplete
 
         combined = "\n\n".join(parts)
         if not combined.strip():
-            reason = " ".join(notes) or "No text could be extracted from the submitted file(s)."
-            return None, ", ".join(a.get("filename", "file") for a in attachments), reason
-        if notes:
-            combined += "\n\n" + "\n".join(notes)
-        return combined, ", ".join(filenames), None
+            reason = " ".join(problems) or "No text could be extracted from the submitted file(s)."
+            return None, ", ".join(a.get("filename", "file") for a in attachments), reason, notes
+
+        # One unreadable file among several is not a failure, but the grade is
+        # then based on part of the work -- which the faculty member has to know.
+        if problems:
+            notes.extend(problems)
+
+        # A file that visibly holds content we could not read is refused rather
+        # than graded: an invented zero on correct work is the worst outcome
+        # this pipeline can produce, and it looks entirely plausible.
+        if incomplete:
+            return None, ", ".join(filenames), " ".join(notes) or "Extraction looks incomplete.", notes
+
+        return combined, ", ".join(filenames), None, notes
 
     body = submission.get("body")
     if body and extract.strip_html(body):
-        return extract.strip_html(body), None, None
+        return extract.strip_html(body), None, None, []
 
-    return None, None, "No file attachment or text entry found for this submission."
+    return None, None, "No file attachment or text entry found for this submission.", []
 
 
 def _dump_breakdown(breakdown):

@@ -314,9 +314,9 @@ def test_triage_ordering():
 
     print("\n-- the review queue is ordered by what needs attention --")
 
-    def row(name, confidence=None, error=None, stale=0):
+    def row(name, confidence=None, error=None, stale=0, notes=None):
         return {"student_name": name, "ai_confidence": confidence,
-                "ai_error": error, "review_stale": stale}
+                "ai_error": error, "review_stale": stale, "extraction_notes": notes}
 
     check("a failed row is top priority",
           _attention_bucket(row("a", error="could not read file")) == "error")
@@ -326,6 +326,10 @@ def test_triage_ordering():
           _attention_bucket(row("a", confidence="low")) == "low")
     check("an ungraded confidence defaults to medium",
           _attention_bucket(row("a")) == "medium")
+    # A grade computed from a file we only partly read needs a human eye no
+    # matter how sure the model said it was.
+    check("an extraction warning overrides high confidence",
+          _attention_bucket(row("a", confidence="high", notes="2 images unreadable")) == "low")
 
     rows = [
         row("Eve", confidence="high"),
