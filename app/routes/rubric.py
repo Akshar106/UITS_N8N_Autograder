@@ -167,6 +167,19 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
         expected_criteria = json.loads(rubric["canvas_criteria_json"]) if rubric["canvas_criteria_json"] else None
         expected_total = rubric["canvas_points_possible"]
 
+        # Calibration: submissions this faculty member has already graded and
+        # approved become worked examples for the rest of the roster, so the model
+        # matches THIS instructor's strictness on THIS assignment rather than a
+        # generic reading of the rubric. Empty on a first run, which is fine --
+        # grading then works exactly as it did before.
+        anchors = _build_anchor_examples(
+            iu_user_id, course_id, assignment_id, submissions, access_token
+        )
+        if anchors:
+            current_app.logger.info(
+                "Calibrating against %d instructor-graded example(s)", len(anchors)
+            )
+
         try:
             for submission in submissions:
                 user = submission.get("user") or {}
@@ -195,6 +208,7 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                     result = grading.grade_submission(
                         rubric["assignment_name"], rubric["rubric_text"], student_id, student_text,
                         expected_criteria=expected_criteria, expected_total=expected_total,
+                        anchors=anchors,
                     )
                     if result["ok"]:
                         data = result["data"]
@@ -203,6 +217,7 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                             student_name, submission_filename,
                             data.get("score_awarded"), data.get("total_points"), data.get("overall_feedback"),
                             _dump_breakdown(data.get("per_question_breakdown")),
+                            ai_confidence=data.get("confidence"),
                             submission_attempt=attempt, submitted_at=submitted_at,
                         )
                     else:
@@ -218,6 +233,35 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
             storage.finish_grading_job(iu_user_id, course_id, assignment_id, "done")
         except Exception as exc:  # noqa: BLE001 -- last-resort guard so the job never hangs at "running" forever
             storage.finish_grading_job(iu_user_id, course_id, assignment_id, "error", str(exc))
+
+
+def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, access_token):
+    """Pair the faculty member's own settled grades with the text they graded.
+
+    The submission text is deliberately not kept in the database -- it is student
+    work, and the less of it stored the better -- so it is re-extracted here from
+    the same Canvas fetch the run is already working through.
+    """
+    reviewed = storage.list_reviewed_student_ids(iu_user_id, course_id, assignment_id)
+    if not reviewed:
+        return []
+
+    by_student = {str(s["user_id"]): s for s in submissions if s.get("user_id") is not None}
+    candidates = []
+    for row in reviewed:
+        submission = by_student.get(str(row["student_id"]))
+        if submission is None:
+            continue  # graded earlier but no longer in this fetch
+        text, _filename, error = _extract_submission_text(submission, access_token)
+        if error or not text:
+            continue
+        candidates.append({
+            "score": row["faculty_score"],
+            "feedback": row["faculty_feedback"],
+            "text": text,
+        })
+
+    return grading.select_anchor_examples(candidates)
 
 
 def _extract_submission_text(submission, access_token):

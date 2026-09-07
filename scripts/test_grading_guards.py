@@ -26,12 +26,18 @@ def check(label, condition):
         FAILS.append(label)
 
 
-def response(items, stated_score=None, stated_total=None):
-    """A model response with the given per-question awards."""
+def response(items, stated_score=None, stated_total=None, extras=None):
+    """A model response with the given per-question awards.
+
+    extras, when given, is a list of dicts merged into the matching breakdown
+    entry -- used to script evidence and confidence values.
+    """
     breakdown = [
         {"question": f"Q{i}", "max_points": mx, "awarded_points": aw, "comment": "c"}
         for i, (aw, mx) in enumerate(items, start=1)
     ]
+    for item, extra in zip(breakdown, extras or []):
+        item.update(extra)
     return json.dumps({
         "Assignment": "DSA",
         "student_id": "1",
@@ -46,13 +52,152 @@ FIVE_CRITERIA = [{"description": f"Q{i}", "points": 10.0} for i in range(1, 6)]
 GOOD = [(10.0, 10.0), (7.0, 10.0), (4.0, 10.0), (0.0, 10.0), (10.0, 10.0)]
 
 
-def grade(raw_responses, **kwargs):
+def grade(raw_responses, student_text="answer", **kwargs):
     """Run grade_submission against a scripted sequence of model replies."""
     from app import grading
 
     replies = list(raw_responses)
     with mock.patch.object(grading, "call_reallm", side_effect=lambda *a: replies.pop(0)):
-        return grading.grade_submission("DSA", "rubric", "1", "answer", **kwargs)
+        return grading.grade_submission("DSA", "rubric", "1", student_text, **kwargs)
+
+
+STUDENT_ANSWER = (
+    "Q1: A binary search tree keeps all values in the left subtree smaller than "
+    "the node. Average-case search is O(log n) when the tree is balanced.\n\n"
+    "Q2: The naive recursive version is O(2^n) because it recomputes subproblems."
+)
+
+
+def test_evidence_verification():
+    print("\n-- an award has to be backed by the student's own words --")
+
+    verbatim = grade(
+        [response([(10.0, 10.0)], extras=[{"evidence": "Average-case search is O(log n)"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    item = verbatim["data"]["per_question_breakdown"][0]
+    check("a verbatim quote is verified", item["evidence_verified"] is True)
+
+    # The prompt asks for " ... " between fragments of a shortened quote.
+    elided = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "A binary search tree keeps ... smaller than the node"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("an elided quote is verified when every fragment is present in order",
+          elided["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    out_of_order = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "smaller than the node ... A binary search tree keeps"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("fragments quoted out of order are not verified",
+          out_of_order["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
+
+    fabricated = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "The student clearly explained the degenerate tree case"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    fab_item = fabricated["data"]["per_question_breakdown"][0]
+    check("an invented quote is flagged", fab_item["evidence_verified"] is False)
+    check("an invented quote does not fail the submission", fabricated["ok"])
+    check("an invented quote forces the row to low confidence",
+          fabricated["data"]["confidence"] == "low")
+
+    messy = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "AVERAGE-CASE   search\nis O(log n)"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("case and whitespace differences still verify",
+          messy["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    none_given = grade([response([(0.0, 10.0)])], student_text=STUDENT_ANSWER)
+    blank = none_given["data"]["per_question_breakdown"][0]
+    check("no quote offered is neither verified nor flagged", blank["evidence_verified"] is None)
+    check("a missing evidence field defaults to empty", blank["evidence"] == "")
+    check("a missing 'missing' field defaults to empty", blank["missing"] == "")
+
+
+def test_confidence():
+    print("\n-- confidence is normalised and rolls up to the row --")
+
+    result = grade([response(
+        [(10.0, 10.0), (5.0, 10.0), (0.0, 10.0)],
+        extras=[{"confidence": "high"}, {"confidence": "LOW"}, {"confidence": "medium"}],
+    )], student_text=STUDENT_ANSWER)
+    levels = [q["confidence"] for q in result["data"]["per_question_breakdown"]]
+    check("valid confidence values are kept", levels == ["high", "low", "medium"])
+    check("confidence is case-insensitive", levels[1] == "low")
+    check("the row takes the weakest question's confidence",
+          result["data"]["confidence"] == "low")
+
+    result = grade([response([(10.0, 10.0)], extras=[{"confidence": "extremely sure"}])])
+    check("a nonsense confidence value falls back to medium",
+          result["data"]["per_question_breakdown"][0]["confidence"] == "medium")
+
+    result = grade([response([(10.0, 10.0)])])
+    check("a missing confidence field falls back to medium",
+          result["data"]["confidence"] == "medium")
+
+    result = grade([response(
+        [(10.0, 10.0), (10.0, 10.0)],
+        extras=[{"confidence": "high"}, {"confidence": "high"}],
+    )])
+    check("all-high questions give a high-confidence row",
+          result["data"]["confidence"] == "high")
+
+
+def test_anchor_examples():
+    print("\n-- calibration against the instructor's own grading --")
+    from app import grading
+
+    reviewed = [
+        {"score": 12.0, "feedback": "weak", "text": "bad answer"},
+        {"score": 25.0, "feedback": "", "text": "middling answer"},
+        {"score": 31.0, "feedback": "", "text": "ok answer"},
+        {"score": 47.0, "feedback": "strong", "text": "great answer"},
+    ]
+    picked = grading.select_anchor_examples(reviewed, limit=3)
+    check("three anchors are chosen", len(picked) == 3)
+    check("the anchors span the score range",
+          picked[0]["score"] == 12.0 and picked[-1]["score"] == 47.0)
+    check("the anchors are ordered by score",
+          [a["score"] for a in picked] == sorted(a["score"] for a in picked))
+
+    check("fewer reviewed than the limit returns them all",
+          len(grading.select_anchor_examples(reviewed[:2], limit=3)) == 2)
+    check("no reviewed submissions gives no anchors",
+          grading.select_anchor_examples([], limit=3) == [])
+    check("rows with no score are skipped",
+          grading.select_anchor_examples([{"score": None, "text": "x"}]) == [])
+    check("rows with no text are skipped",
+          grading.select_anchor_examples([{"score": 10.0, "text": "   "}]) == [])
+
+    rendered = grading.render_anchor_examples(picked, total_points=50)
+    check("the rendered block states the instructor's scores",
+          "awarded 12 / 50" in rendered and "awarded 47 / 50" in rendered)
+    check("the rendered block carries the graded text", "great answer" in rendered)
+    check("the instructor's comments are included", "strong" in rendered)
+    check("the block tells the model not to grade the examples",
+          "NOT grade these submissions" in rendered)
+
+    long_anchor = [{"score": 10.0, "feedback": "", "text": "x" * (grading.ANCHOR_TEXT_LIMIT + 500)}]
+    check("a very long example is truncated",
+          "[...truncated]" in grading.render_anchor_examples(long_anchor))
+    check("no anchors renders nothing", grading.render_anchor_examples([]) == "")
+
+    prompt = grading.build_user_prompt(
+        "DSA", "the rubric", "1", "the answer being graded",
+        anchors=picked, total_points=50,
+    )
+    check("anchors appear in the prompt", "INSTRUCTOR-GRADED EXAMPLES" in prompt)
+    check("the answer being graded comes last",
+          prompt.rindex("the answer being graded") > prompt.rindex("great answer"))
+    check("a prompt without anchors omits the section",
+          "INSTRUCTOR-GRADED" not in grading.build_user_prompt("DSA", "r", "1", "a"))
 
 
 def test_arithmetic():
@@ -241,6 +386,14 @@ def test_prompt_guards():
           "EXACTLY ONE breakdown entry" in prompt)
     check("the prompt says unanswered questions still get an entry",
           "not attempted" in prompt)
+    check("the prompt says which rubric section is authoritative",
+          "SCORING RUBRIC section wins" in prompt)
+    check("the prompt demands verbatim quotes from the student",
+          "VERBATIM" in prompt and "evidence" in prompt)
+    check("the prompt forbids quoting text the student did not write",
+          "NEVER quote text that is not in the student's answer" in prompt)
+    check("the prompt asks for an honest confidence level",
+          '"high", "medium" or "low"' in prompt and "not a failure" in prompt)
 
 
 def main():
@@ -248,6 +401,9 @@ def main():
     test_impossible_scores()
     test_rubric_coverage()
     test_retries()
+    test_evidence_verification()
+    test_confidence()
+    test_anchor_examples()
     test_llm_client()
     test_prompt_guards()
 

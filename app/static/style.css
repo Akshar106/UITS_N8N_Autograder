@@ -71,6 +71,33 @@ th {
 .note:first-child { margin-top: 0; }
 .note-error { background: #fce8e6; color: #611a15; }
 
+/* Confidence badge. Only medium/low are shown per question -- "high" on every
+   row of a 200-row table is noise, so its absence carries the meaning. */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.78em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.badge-high   { background: #e6f4ea; color: #1e4620; }
+.badge-medium { background: #fef7e0; color: #5c4400; }
+.badge-low    { background: #fce8e6; color: #611a15; }
+
+/* The student's own words, so they read as a quotation and not as the app's
+   own prose. */
+.quote {
+  display: block;
+  border-left: 3px solid var(--border);
+  padding: 0.15rem 0 0.15rem 0.5rem;
+  margin: 0.25rem 0;
+  font-style: italic;
+  opacity: 0.85;
+}
+
 /* Review queue: give each column a share of the width so the two prose columns
    get the room and the narrow ones stop wrapping mid-word. */
 .review-table { table-layout: fixed; }

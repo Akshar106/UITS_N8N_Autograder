@@ -53,17 +53,30 @@ def grade_once(assignment_name, rubric_text, student_id, student_text, expected_
     )
     if not result["ok"]:
         return None, result["error"]
-    return result["data"]["score_awarded"], None
+    return result["data"], None
 
 
 def grade_repeatedly(spec, text, student_id, repeats):
-    scores, errors = [], []
+    """Returns (scores, errors, quality) -- quality summarising the last good run."""
+    scores, errors, quality = [], [], {}
     for _ in range(repeats):
-        score, error = grade_once(
+        data, error = grade_once(
             spec["assignment_name"], spec["rubric_text"], student_id, text, spec["total_points"]
         )
-        (errors if error else scores).append(error if error else score)
-    return scores, errors
+        if error:
+            errors.append(error)
+            continue
+        scores.append(data["score_awarded"])
+        breakdown = data["per_question_breakdown"]
+        # How well the model supported its own judgments, which is as much a
+        # quality signal as the score itself.
+        quality = {
+            "confidence": data.get("confidence"),
+            "questions": len(breakdown),
+            "quoted": sum(1 for q in breakdown if q.get("evidence")),
+            "unverified": sum(1 for q in breakdown if q.get("evidence_verified") is False),
+        }
+    return scores, errors, quality
 
 
 def evaluate_submissions(spec, repeats):
@@ -71,7 +84,7 @@ def evaluate_submissions(spec, repeats):
     for entry in spec["submissions"]:
         name = Path(entry["file"]).stem
         print(f"  grading {name} ...", flush=True)
-        scores, errors = grade_repeatedly(spec, read_text(entry["file"]), name, repeats)
+        scores, errors, quality = grade_repeatedly(spec, read_text(entry["file"]), name, repeats)
 
         row = {
             "name": name,
@@ -79,6 +92,7 @@ def evaluate_submissions(spec, repeats):
             "note": entry.get("note", ""),
             "scores": scores,
             "errors": errors,
+            **quality,
         }
         if scores:
             row["score"] = statistics.median(scores)
@@ -92,8 +106,8 @@ def evaluate_probes(spec, repeats):
     results = []
     for probe in spec.get("probes", []):
         print(f"  probe {probe['name']} ...", flush=True)
-        base, base_errs = grade_repeatedly(spec, read_text(probe["baseline"]), "baseline", repeats)
-        var, var_errs = grade_repeatedly(spec, read_text(probe["variant"]), "variant", repeats)
+        base, base_errs, _ = grade_repeatedly(spec, read_text(probe["baseline"]), "baseline", repeats)
+        var, var_errs, _ = grade_repeatedly(spec, read_text(probe["variant"]), "variant", repeats)
 
         result = {"name": probe["name"], "max_delta": probe["max_delta"], "why": probe["why"]}
         if base and var:
@@ -127,24 +141,32 @@ def summarise(rows):
         "within_5": round(100 * sum(e <= 5 for e in errors) / len(errors)),
         "max_spread": max(spreads),
         "reproducible": all(s == 0 for s in spreads),
+        "questions_total": sum(r.get("questions", 0) for r in graded),
+        "questions_quoted": sum(r.get("quoted", 0) for r in graded),
+        "quotes_unverified": sum(r.get("unverified", 0) for r in graded),
+        "low_confidence_rows": sum(1 for r in graded if r.get("confidence") == "low"),
     }
 
 
 def print_report(spec, rows, probes, summary, repeats):
-    print("\n" + "=" * 78)
+    print("\n" + "=" * 85)
     print(f"GRADING EVALUATION  --  {spec['assignment_name']}  ({repeats} run(s) per submission)")
-    print("=" * 78)
+    print("=" * 85)
 
     print(f"\n{'submission':<20}{'expected':>10}{'scored':>10}{'error':>9}"
-          f"{'spread':>9}  note")
-    print("-" * 78)
+          f"{'spread':>9}{'conf':>9}{'quotes':>16}")
+    print("-" * 85)
     for row in rows:
         if "score" not in row:
-            print(f"{row['name']:<20}{row['expected']:>10}{'FAILED':>10}{'':>9}{'':>9}  "
-                  f"{(row['errors'] or ['unknown'])[0]}")
+            print(f"{row['name']:<20}{row['expected']:>10}{'FAILED':>10}   "
+                  f"{(row['errors'] or ['unknown'])[0][:32]}")
             continue
+        quotes = f"{row.get('quoted', 0)}/{row.get('questions', 0)}"
+        if row.get("unverified"):
+            quotes += f" ({row['unverified']} bad)"
         print(f"{row['name']:<20}{row['expected']:>10}{row['score']:>10}"
-              f"{row['error_points']:>+9.1f}{row['spread']:>9.1f}  {row['note']}")
+              f"{row['error_points']:>+9.1f}{row['spread']:>9.1f}"
+              f"{(row.get('confidence') or '-'):>9}{quotes:>16}")
 
     if summary.get("graded"):
         print(f"\n  MAE {summary['mae']} points   RMSE {summary['rmse']}   "
@@ -157,10 +179,14 @@ def print_report(spec, rows, probes, summary, repeats):
             verdict = "reproducible" if summary["reproducible"] else \
                       f"NOT reproducible (largest spread {summary['max_spread']} points)"
             print(f"  run-to-run: {verdict}")
+        print(f"  grounding: {summary['questions_quoted']}/{summary['questions_total']} questions "
+              f"cited the student's words, {summary['quotes_unverified']} quote(s) not found in "
+              f"the submission")
+        print(f"  triage: {summary['low_confidence_rows']} row(s) reported low confidence")
 
     if probes:
         print("\nBIAS PROBES  (same content, different writing)")
-        print("-" * 78)
+        print("-" * 85)
         for probe in probes:
             if probe["passed"] is None:
                 print(f"  {probe['name']:<12} could not be graded")

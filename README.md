@@ -110,8 +110,12 @@ Then:
 3. **Courses/assignments** are pulled live from the Canvas API (read-only) using the connected Canvas token.
 4. **Rubric upload** accepts PDF/DOCX/TXT, extracts the text, and stores it per assignment.
 5. **Grading** runs in a background thread (started when you click "Grade all submissions," not blocking the request) — downloads each submission (file upload or text-entry, all attachments if there's more than one), sends rubric + submission text to the LLM with a strict grading prompt, and stores each result (score, per-question breakdown, feedback) as soon as it's ready. The review page shows live progress and refreshes automatically until grading finishes.
-6. **Review** lets faculty see the AI's score/feedback per student, override either field, and mark it approved. If the AI's computed total doesn't match the assignment's actual Canvas points total, a warning banner flags it before anything gets entered into Canvas.
-7. **Export** builds a formatted `.xlsx` (AI score, final score, percentage, approval status, feedback) for manual entry into the Canvas gradebook — the Developer Key is read-only, so there is no automated gradebook write-back.
+6. **Review** lets faculty see the AI's score/feedback per student, override either field, and mark it approved. If the AI's computed total doesn't match the assignment's actual Canvas points total, a warning banner flags it before anything gets entered into Canvas. Three things shape this page:
+   - **Evidence.** Every per-question award quotes the student's own words, and the app checks that quote is really in the submission. A quote it can't find is shown in red — that's the one place a fabricated award becomes visible.
+   - **Confidence.** The grader reports high/medium/low per question; the row takes the weakest, and an unverifiable quote forces it to low.
+   - **Triage order.** The queue leads with failed rows, then reviews the work has outrun, then low-confidence judgments — so faculty attention goes where it changes an outcome. Sort by name instead with the link above the table.
+7. **Calibration.** Once some grades are approved, later runs on the same assignment include a spread of those instructor-graded submissions (lowest, middle, highest) as worked examples, so the model matches *that* instructor's strictness rather than a generic reading of the rubric. A first run has none and behaves exactly as before. Only approved, non-stale rows with a human score count — an AI score nobody confirmed would just teach the model to agree with itself.
+8. **Export** builds a formatted `.xlsx` (AI score, final score, percentage, approval status, feedback) for manual entry into the Canvas gradebook — the Developer Key is read-only, so there is no automated gradebook write-back.
 
 ### What to give the IU Login team
 

@@ -42,6 +42,24 @@
   {% endif %}
 
   <p class="muted">AI-suggested grades below are drafts only. Edit or approve each row, then export the approved grades to Excel for entry into Canvas.</p>
+
+  {% if submissions %}
+    <p class="muted">
+      {{ approved_count }} of {{ submissions | length }} approved.
+      {% if needs_attention %}
+        <strong>{{ needs_attention }}</strong> need a closer look &mdash; those are listed first.
+      {% endif %}
+      &middot;
+      {% if sort == 'attention' %}
+        Sorted by what needs attention &middot;
+        <a href="{{ url_for('review.review_queue', course_id=course_id, assignment_id=assignment_id, sort='name') }}">sort by name</a>
+      {% else %}
+        Sorted by name &middot;
+        <a href="{{ url_for('review.review_queue', course_id=course_id, assignment_id=assignment_id) }}">sort by what needs attention</a>
+      {% endif %}
+    </p>
+  {% endif %}
+
   <p><a class="btn" href="{{ url_for('export.export_grades', course_id=course_id, assignment_id=assignment_id) }}">Export to Excel</a></p>
 
   {% if not submissions %}
@@ -79,8 +97,17 @@
               {% else %}
                 <span class="score">{{ s.ai_score }} / {{ s.ai_total }}</span>
               {% endif %}
+              {% if s.ai_confidence and not s.ai_error %}
+                <span class="badge badge-{{ s.ai_confidence }}">{{ s.ai_confidence }} confidence</span>
+              {% endif %}
               {% if s.review_stale %}
                 <span class="note note-error">Resubmitted or re-scoped since you approved this &mdash; please re-check.</span>
+              {% endif %}
+              {% if s.unverified_quotes %}
+                <span class="note note-error">
+                  {{ s.unverified_quotes }} quote{{ 's' if s.unverified_quotes != 1 }} could not be
+                  found in this submission &mdash; check those awards carefully.
+                </span>
               {% endif %}
             </td>
             <td>
@@ -90,7 +117,30 @@
                   <summary>Per-question breakdown</summary>
                   <ul>
                     {% for q in s.breakdown %}
-                      <li><strong>{{ q.question }}</strong> — {{ q.awarded_points }}/{{ q.max_points }}: {{ q.comment }}</li>
+                      <li>
+                        <strong>{{ q.question }}</strong> — {{ q.awarded_points }}/{{ q.max_points }}
+                        {% if q.confidence and q.confidence != 'high' %}
+                          <span class="badge badge-{{ q.confidence }}">{{ q.confidence }}</span>
+                        {% endif %}
+                        <br>{{ q.comment }}
+                        {#
+                          The quote is what makes this checkable in seconds instead of
+                          re-reading the whole answer -- and a quote the app could not
+                          find in the submission is the one place a fabricated award
+                          becomes visible.
+                        #}
+                        {% if q.evidence %}
+                          <br>
+                          {% if q.evidence_verified is false %}
+                            <span class="note note-error">Not found in the submission: &ldquo;{{ q.evidence }}&rdquo;</span>
+                          {% else %}
+                            <span class="quote">&ldquo;{{ q.evidence }}&rdquo;</span>
+                          {% endif %}
+                        {% endif %}
+                        {% if q.missing %}
+                          <br><span class="muted">Missing: {{ q.missing }}</span>
+                        {% endif %}
+                      </li>
                     {% endfor %}
                   </ul>
                 </details>

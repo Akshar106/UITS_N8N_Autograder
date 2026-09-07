@@ -10,6 +10,28 @@ review_bp = Blueprint("review", __name__)
 
 TOTAL_MISMATCH_TOLERANCE = 0.01
 
+# Lower sorts first. Faculty attention is the scarce resource in this whole
+# design, so the queue leads with the rows where it actually changes an outcome:
+# something the grader could not do, a review the work has outrun, and then the
+# judgments the grader itself reported as shaky. Rows it was confident about --
+# usually most of them -- come last, where a quick scan is enough.
+ATTENTION_ORDER = {"error": 0, "stale": 1, "low": 2, "medium": 3, "high": 4}
+
+
+def _attention_bucket(submission):
+    if submission["ai_error"]:
+        return "error"
+    if submission["review_stale"]:
+        return "stale"
+    return submission["ai_confidence"] or "medium"
+
+
+def _sort_key(submission):
+    return (
+        ATTENTION_ORDER.get(_attention_bucket(submission), 3),
+        (submission["student_name"] or "").lower(),
+    )
+
 
 @review_bp.route("/courses/<course_id>/assignments/<assignment_id>/review")
 @canvas_required
@@ -19,6 +41,14 @@ def review_queue(course_id, assignment_id):
     submissions = storage.list_submissions(user_id, course_id, assignment_id)
     for s in submissions:
         s["breakdown"] = json.loads(s["ai_breakdown_json"]) if s["ai_breakdown_json"] else []
+        s["attention"] = _attention_bucket(s)
+        s["unverified_quotes"] = sum(1 for q in s["breakdown"] if q.get("evidence_verified") is False)
+
+    # storage returns them by name; re-order unless the faculty member asked for
+    # the roster order instead (handy when entering grades into Canvas).
+    sort = "name" if request.args.get("sort") == "name" else "attention"
+    if sort == "attention":
+        submissions.sort(key=_sort_key)
 
     total_mismatch = None
     expected_total = rubric.get("canvas_points_possible") if rubric else None
@@ -36,6 +66,8 @@ def review_queue(course_id, assignment_id):
     job = storage.get_grading_job(user_id, course_id, assignment_id)
     job_stale = storage.job_is_stale(job)
     stale_reviews = sum(1 for s in submissions if s["review_stale"])
+    needs_attention = sum(1 for s in submissions if s["attention"] in ("error", "stale", "low"))
+    approved_count = sum(1 for s in submissions if s["approved"])
 
     return render_template(
         "review.html",
@@ -45,6 +77,9 @@ def review_queue(course_id, assignment_id):
         submissions=submissions,
         total_mismatch=total_mismatch,
         stale_reviews=stale_reviews,
+        needs_attention=needs_attention,
+        approved_count=approved_count,
+        sort=sort,
         job=job,
         job_stale=job_stale,
     )

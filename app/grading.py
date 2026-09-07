@@ -10,9 +10,27 @@ SYSTEM_PROMPT = """You are an automated grading assistant designed for STRICT an
 
 You will be given:
 1. A grading rubric containing questions, expected concepts, and point values
-2. A student's answers for the SAME assignment
+2. Optionally, instructor-graded examples of other submissions for this same assignment
+3. A student's answers for the SAME assignment
 
 Your task is to grade the student's answers with maximum accuracy and ZERO hallucination.
+
+────────────────────────────
+WHICH PART OF THE RUBRIC WINS
+────────────────────────────
+
+The rubric may arrive in two labelled sections:
+
+- "SCORING RUBRIC" comes from the rubric attached to the assignment. It is
+  AUTHORITATIVE for the list of questions, the maximum points on each, and the
+  overall total. Grade exactly the questions it lists, out of exactly its points.
+- "GRADING NOTES / ANSWER KEY" is supporting material from the instructor. Use it
+  for subject-matter detail -- the full question wording, what a correct answer
+  contains, worked reasoning.
+
+If the two sections disagree about how many questions there are or how many
+points a question is worth, the SCORING RUBRIC section wins. If only one section
+is present, use it for both purposes.
 
 ────────────────────────────
 GRADING RULES (MANDATORY)
@@ -90,6 +108,41 @@ COVERAGE (MANDATORY)
   entry with awarded_points 0 and say the question was not attempted.
 
 ────────────────────────────
+CITE THE STUDENT'S OWN WORDS (MANDATORY)
+────────────────────────────
+
+For every question, quote the part of the STUDENT'S ANSWER your score is based on,
+in an "evidence" field:
+
+- Copy the words VERBATIM from the student's answer. Do not paraphrase, correct,
+  or tidy them. To shorten a long passage, join fragments with " ... ".
+- Quote the span that earns the points. If the answer earns nothing, quote the
+  part that attempts the question, or use "" if the question was not attempted.
+- NEVER quote text that is not in the student's answer. If you cannot find
+  supporting words in the answer, you cannot award the points.
+- In a "missing" field, state what the rubric required that the answer does not
+  contain. Use "" when nothing is missing.
+
+The evidence is checked against the student's answer, so an invented quote will
+be detected.
+
+────────────────────────────
+REPORT YOUR CONFIDENCE
+────────────────────────────
+
+Give each question a "confidence" of exactly "high", "medium" or "low":
+
+- "high"   -- the rubric requirement is either clearly present or clearly absent.
+- "medium" -- the answer is partially or ambiguously on target and the split of
+              partial credit is a judgment call.
+- "low"    -- you are genuinely unsure: the answer is unclear, self-contradictory,
+              uses unfamiliar notation, or could be read as correct or incorrect.
+
+Be honest. "low" is not a failure -- it routes the answer to a human, which is
+the correct outcome for a genuinely ambiguous response. Do not mark something
+"high" to look decisive.
+
+────────────────────────────
 OUTPUT FORMAT (STRICT)
 ────────────────────────────
 
@@ -105,6 +158,9 @@ Return ONLY valid JSON in the following format:
       "question": string,
       "max_points": number,
       "awarded_points": number,
+      "evidence": string,
+      "missing": string,
+      "confidence": "high" | "medium" | "low",
       "comment": string
     }
   ],
@@ -151,6 +207,85 @@ def _coerce_numeric_fields(data):
 # Points are compared with a small tolerance: rubric values are floats and a
 # model may return 9.999999 for 10.
 POINT_TOLERANCE = 0.01
+
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+DEFAULT_CONFIDENCE = "medium"
+
+_WHITESPACE_RE = re.compile(r"\s+")
+# The prompt asks for " ... " between fragments of a shortened quote; accept the
+# unicode ellipsis and bare dots too, since models produce all three.
+_ELLIPSIS_RE = re.compile(r"\s*(?:\.\.\.+|…)\s*")
+
+
+def _normalise(text):
+    return _WHITESPACE_RE.sub(" ", (text or "")).strip().lower()
+
+
+def _quote_is_in(quote, student_text):
+    """Is this quote actually present in what the student wrote?
+
+    A model that awards points for something the student never said will
+    usually still produce a confident-sounding quote. Checking the quote against
+    the source turns that from an invisible fabrication into a visible flag, and
+    it is the only automatic grounding check available -- everything else about
+    the judgment is a matter of opinion.
+    """
+    haystack = _normalise(student_text)
+    if not haystack:
+        return False
+    # Each fragment of an elided quote has to appear, and in order.
+    position = 0
+    for fragment in _ELLIPSIS_RE.split(quote):
+        fragment = _normalise(fragment)
+        if not fragment:
+            continue
+        found = haystack.find(fragment, position)
+        if found == -1:
+            return False
+        position = found + len(fragment)
+    return True
+
+
+def _annotate_evidence_and_confidence(data, student_text):
+    """Fill in and check the evidence/confidence fields.
+
+    Deliberately forgiving: a model that omits these does not fail the whole
+    submission, because a missing quote is a quality signal to show a faculty
+    member, not a reason to leave a real student ungraded. What the response
+    cannot do is claim support that is not there without it being noticed.
+    """
+    weakest = "high"
+    for item in data["per_question_breakdown"]:
+        evidence = item.get("evidence")
+        item["evidence"] = evidence.strip() if isinstance(evidence, str) else ""
+        missing = item.get("missing")
+        item["missing"] = missing.strip() if isinstance(missing, str) else ""
+
+        confidence = item.get("confidence")
+        confidence = confidence.strip().lower() if isinstance(confidence, str) else ""
+        item["confidence"] = confidence if confidence in CONFIDENCE_LEVELS else DEFAULT_CONFIDENCE
+
+        if item["evidence"]:
+            item["evidence_verified"] = _quote_is_in(item["evidence"], student_text)
+            if not item["evidence_verified"]:
+                logger.warning(
+                    "Evidence quote for %r is not present in the submission: %r",
+                    item.get("question"), item["evidence"][:120],
+                )
+        else:
+            # No quote offered. Expected when a question was not attempted;
+            # worth a faculty glance when points were awarded anyway.
+            item["evidence_verified"] = None
+
+        if CONFIDENCE_LEVELS.index(item["confidence"]) < CONFIDENCE_LEVELS.index(weakest):
+            weakest = item["confidence"]
+
+    # An unverifiable quote is a reason for a human to look, whatever the model
+    # said about its own confidence.
+    if any(item["evidence_verified"] is False for item in data["per_question_breakdown"]):
+        weakest = "low"
+
+    data["confidence"] = weakest
 
 
 def _recompute_totals(data):
@@ -219,16 +354,81 @@ def _validate_breakdown(data, expected_criteria=None, expected_total=None):
         )
 
 
-def build_user_prompt(assignment_name, rubric_text, student_id, student_text):
-    return (
-        f"Assignment:\n{assignment_name}\n\n"
-        f"Rubric:\n{rubric_text}\n\n"
-        f"Student ID:\n{student_id}\n\n"
-        f"Student Answer:\n{student_text}\n"
+# Long enough to show the standard, short enough that three of them do not crowd
+# out the rubric and the answer being graded.
+ANCHOR_TEXT_LIMIT = 1500
+MAX_ANCHORS = 3
+
+
+def select_anchor_examples(reviewed, limit=MAX_ANCHORS):
+    """Pick a spread of instructor-graded submissions to calibrate against.
+
+    Lowest, highest and middle rather than the first few: the point is to show
+    the model the whole range of this instructor's standard, and three
+    submissions that all scored well teach it nothing about where marks come off.
+    """
+    usable = sorted(
+        (r for r in reviewed if r.get("score") is not None and (r.get("text") or "").strip()),
+        key=lambda r: r["score"],
     )
+    if len(usable) <= limit:
+        return usable
+
+    # Evenly spaced positions across the sorted range, endpoints included.
+    step = (len(usable) - 1) / (limit - 1) if limit > 1 else 0
+    return [usable[round(i * step)] for i in range(limit)]
 
 
-def _parse_llm_json(raw_text, expected_criteria=None, expected_total=None):
+def render_anchor_examples(anchors, total_points=None):
+    if not anchors:
+        return ""
+
+    out_of = f" / {_format_points(total_points)}" if total_points is not None else ""
+    lines = [
+        "INSTRUCTOR-GRADED EXAMPLES",
+        "",
+        "The instructor has already graded these submissions for this same assignment.",
+        "They show the standard of strictness to apply. Calibrate to them: an answer of",
+        "similar quality should receive a similar score. Do NOT copy their scores, and do",
+        "NOT grade these submissions -- grade only the student answer at the end.",
+        "",
+    ]
+    for index, anchor in enumerate(anchors, start=1):
+        text = (anchor.get("text") or "").strip()
+        if len(text) > ANCHOR_TEXT_LIMIT:
+            text = text[:ANCHOR_TEXT_LIMIT].rstrip() + " [...truncated]"
+        lines.append(
+            f"--- Example {index}: the instructor awarded "
+            f"{_format_points(anchor['score'])}{out_of} ---"
+        )
+        lines.append("Submission:")
+        lines.append(text)
+        if (anchor.get("feedback") or "").strip():
+            lines.append(f"Instructor's comments: {anchor['feedback'].strip()}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _format_points(value):
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def build_user_prompt(assignment_name, rubric_text, student_id, student_text,
+                      anchors=None, total_points=None):
+    anchor_block = render_anchor_examples(anchors, total_points) if anchors else ""
+    parts = [f"Assignment:\n{assignment_name}", f"Rubric:\n{rubric_text}"]
+    if anchor_block:
+        parts.append(anchor_block)
+    parts.append(f"Student ID:\n{student_id}")
+    # The answer to grade goes last, immediately before the model responds, so it
+    # cannot be confused with the calibration examples above it.
+    parts.append(f"Student Answer:\n{student_text}\n")
+    return "\n\n".join(parts)
+
+
+def _parse_llm_json(raw_text, student_text="", expected_criteria=None, expected_total=None):
     cleaned = _CODE_FENCE_RE.sub("", raw_text.strip()).strip()
     data = json.loads(cleaned)
     missing = [f for f in REQUIRED_FIELDS if f not in data]
@@ -237,6 +437,7 @@ def _parse_llm_json(raw_text, expected_criteria=None, expected_total=None):
     _coerce_numeric_fields(data)
     _validate_breakdown(data, expected_criteria, expected_total)
     _recompute_totals(data)
+    _annotate_evidence_and_confidence(data, student_text)
     return data
 
 
@@ -247,15 +448,21 @@ GRADING_ATTEMPTS = 3
 
 
 def grade_submission(assignment_name, rubric_text, student_id, student_text,
-                     expected_criteria=None, expected_total=None):
+                     expected_criteria=None, expected_total=None, anchors=None):
     """Calls the LLM and returns a dict:
     {ok: bool, data: {...schema...} | None, error: str | None, raw: str | None}
 
     expected_criteria/expected_total come from the Canvas rubric when there is
     one, and turn "the model quietly skipped a question" from an invisible lost
     grade into a rejected response.
+
+    anchors are submissions the instructor has already graded for this same
+    assignment, used to calibrate to their standard.
     """
-    user_prompt = build_user_prompt(assignment_name, rubric_text, student_id, student_text)
+    user_prompt = build_user_prompt(
+        assignment_name, rubric_text, student_id, student_text,
+        anchors=anchors, total_points=expected_total,
+    )
 
     last_error, last_raw = None, None
     for attempt in range(1, GRADING_ATTEMPTS + 1):
@@ -266,7 +473,7 @@ def grade_submission(assignment_name, rubric_text, student_id, student_text,
             continue
 
         try:
-            data = _parse_llm_json(raw, expected_criteria, expected_total)
+            data = _parse_llm_json(raw, student_text, expected_criteria, expected_total)
         except (json.JSONDecodeError, ValueError) as exc:
             last_error, last_raw = f"Could not parse grading response: {exc}", raw
             logger.warning("Grading attempt %d/%d rejected: %s", attempt, GRADING_ATTEMPTS, exc)

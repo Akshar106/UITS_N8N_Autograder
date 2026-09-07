@@ -308,8 +308,104 @@ def test_stale_row_prefill():
         check("unreviewed row prefills the AI score", score_input(render(rows_for("s2"))) == "31.0")
 
 
+def test_triage_ordering():
+    """The queue must lead with the rows where faculty attention changes an outcome."""
+    from app.routes.review import _attention_bucket, _sort_key
+
+    print("\n-- the review queue is ordered by what needs attention --")
+
+    def row(name, confidence=None, error=None, stale=0):
+        return {"student_name": name, "ai_confidence": confidence,
+                "ai_error": error, "review_stale": stale}
+
+    check("a failed row is top priority",
+          _attention_bucket(row("a", error="could not read file")) == "error")
+    check("a stale review outranks confidence",
+          _attention_bucket(row("a", confidence="high", stale=1)) == "stale")
+    check("otherwise the row takes the grader's confidence",
+          _attention_bucket(row("a", confidence="low")) == "low")
+    check("an ungraded confidence defaults to medium",
+          _attention_bucket(row("a")) == "medium")
+
+    rows = [
+        row("Eve", confidence="high"),
+        row("Bob", confidence="low"),
+        row("Dan", confidence="medium"),
+        row("Amy", error="download failed"),
+        row("Cal", confidence="high", stale=1),
+    ]
+    ordered = [r["student_name"] for r in sorted(rows, key=_sort_key)]
+    check("errors, then stale, then low, then medium, then high",
+          ordered == ["Amy", "Cal", "Bob", "Dan", "Eve"])
+
+    same = [row("Zoe", confidence="low"), row("Ann", confidence="low")]
+    check("ties fall back to student name",
+          [r["student_name"] for r in sorted(same, key=_sort_key)] == ["Ann", "Zoe"])
+
+
+def test_anchor_pipeline():
+    """Approved rows must reach the grader as calibration examples."""
+    from app import storage
+    from app.routes.rubric import _build_anchor_examples
+
+    print("\n-- approved grades become calibration examples on the next run --")
+
+    db_path = os.path.join(tempfile.mkdtemp(), "anchors.sqlite3")
+    app = make_app(db_path)
+    storage.init_db(app)
+
+    # Canvas text-entry submissions, so no download is needed.
+    submissions = [
+        {"user_id": 1, "body": "<p>first answer</p>", "attempt": 1},
+        {"user_id": 2, "body": "<p>second answer</p>", "attempt": 1},
+        {"user_id": 3, "body": "<p>third answer</p>", "attempt": 1},
+    ]
+
+    with app.app_context():
+        for student_id in ("1", "2", "3"):
+            storage.upsert_graded_submission(
+                OWNER, COURSE, ASSIGNMENT, "DSA", student_id, f"Student {student_id}", None,
+                20.0, 50.0, "ai feedback", None, submission_attempt=1, submitted_at="t1")
+
+        check("no approvals yet means no anchors",
+              _build_anchor_examples(OWNER, COURSE, ASSIGNMENT, submissions, "token") == [])
+
+        rows = {r["student_id"]: r["id"] for r in storage.list_submissions(OWNER, COURSE, ASSIGNMENT)}
+        storage.save_faculty_review(OWNER, rows["1"], 11.0, "much too vague", approved=True)
+        storage.save_faculty_review(OWNER, rows["3"], 46.0, "thorough", approved=True)
+        # Scored but never approved -- must not be used as an exemplar.
+        storage.save_faculty_review(OWNER, rows["2"], 30.0, "fine", approved=False)
+
+        anchors = _build_anchor_examples(OWNER, COURSE, ASSIGNMENT, submissions, "token")
+        check("only approved rows become anchors", len(anchors) == 2)
+        check("the anchors carry the faculty score, not the AI score",
+              sorted(a["score"] for a in anchors) == [11.0, 46.0])
+        check("the anchors carry the faculty's own comments",
+              {a["feedback"] for a in anchors} == {"much too vague", "thorough"})
+        check("the graded text is recovered from the Canvas submission",
+              {a["text"] for a in anchors} == {"first answer", "third answer"})
+        check("an unapproved row is excluded",
+              all("second answer" != a["text"] for a in anchors))
+
+        # A stale approval describes work that has been replaced, so it is not a
+        # standard to calibrate against.
+        storage.upsert_graded_submission(
+            OWNER, COURSE, ASSIGNMENT, "DSA", "3", "Student 3", None,
+            20.0, 50.0, "ai feedback", None, submission_attempt=2, submitted_at="t2")
+        anchors = _build_anchor_examples(OWNER, COURSE, ASSIGNMENT, submissions, "token")
+        check("a stale approval is not used as an anchor",
+              [a["score"] for a in anchors] == [11.0])
+
+        # A student graded earlier who is missing from this fetch is skipped
+        # rather than crashing the run.
+        anchors = _build_anchor_examples(OWNER, COURSE, ASSIGNMENT, submissions[1:], "token")
+        check("an anchor absent from the current fetch is skipped", anchors == [])
+
+
 def main():
     test_review_lifecycle()
+    test_triage_ordering()
+    test_anchor_pipeline()
     test_canvas_rubric()
     test_upgrade_from_existing_database()
     test_stale_row_prefill()

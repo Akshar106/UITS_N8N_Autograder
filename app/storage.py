@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     ai_total REAL,
     ai_feedback TEXT,
     ai_breakdown_json TEXT,
+    ai_confidence TEXT,
     ai_error TEXT,
     faculty_score REAL,
     faculty_feedback TEXT,
@@ -80,6 +81,7 @@ ADDED_COLUMNS = {
         "submission_attempt": "INTEGER",
         "submitted_at": "TEXT",
         "review_stale": "INTEGER NOT NULL DEFAULT 0",
+        "ai_confidence": "TEXT",
     },
 }
 
@@ -247,17 +249,17 @@ _HAS_REVIEW = """(
 
 def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_name, student_id,
                              student_name, submission_filename, ai_score, ai_total, ai_feedback,
-                             ai_breakdown_json, ai_error=None, submission_attempt=None,
-                             submitted_at=None):
+                             ai_breakdown_json, ai_error=None, ai_confidence=None,
+                             submission_attempt=None, submitted_at=None):
     db = get_db()
     db.execute(
         f"""
         INSERT INTO submissions (
             iu_user_id, course_id, assignment_id, assignment_name, student_id, student_name,
             submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error,
-            submission_attempt, submitted_at, graded_at
+            ai_confidence, submission_attempt, submitted_at, graded_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(iu_user_id, course_id, assignment_id, student_id) DO UPDATE SET
             assignment_name = excluded.assignment_name,
             student_name = excluded.student_name,
@@ -267,6 +269,7 @@ def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_na
             ai_feedback = excluded.ai_feedback,
             ai_breakdown_json = excluded.ai_breakdown_json,
             ai_error = excluded.ai_error,
+            ai_confidence = excluded.ai_confidence,
             graded_at = excluded.graded_at,
             -- An approval belongs to one specific attempt. When the student
             -- resubmits, the human decision no longer describes the work in
@@ -282,7 +285,7 @@ def upsert_graded_submission(iu_user_id, course_id, assignment_id, assignment_na
         """,
         (iu_user_id, course_id, assignment_id, assignment_name, student_id, student_name,
          submission_filename, ai_score, ai_total, ai_feedback, ai_breakdown_json, ai_error,
-         submission_attempt, submitted_at, _now()),
+         ai_confidence, submission_attempt, submitted_at, _now()),
     )
     db.commit()
     # NOTE: faculty_score / faculty_feedback are deliberately NOT in the DO UPDATE
@@ -298,6 +301,27 @@ def list_submissions(iu_user_id, course_id, assignment_id):
         SELECT * FROM submissions
         WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ?
         ORDER BY student_name COLLATE NOCASE
+        """,
+        (iu_user_id, course_id, assignment_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_reviewed_student_ids(iu_user_id, course_id, assignment_id):
+    """Students whose grade this faculty member has already settled themselves.
+
+    Used to calibrate later grading runs against the instructor's own standard,
+    so only rows carrying a human score count -- an AI score nobody confirmed
+    would just teach the model to agree with itself.
+    """
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT student_id, faculty_score, faculty_feedback
+        FROM submissions
+        WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ?
+          AND approved = 1 AND review_stale = 0 AND faculty_score IS NOT NULL
+        ORDER BY faculty_score
         """,
         (iu_user_id, course_id, assignment_id),
     ).fetchall()
