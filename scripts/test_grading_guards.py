@@ -106,6 +106,36 @@ def test_evidence_verification():
     check("an invented quote forces the row to low confidence",
           fabricated["data"]["confidence"] == "low")
 
+    # The two false positives seen in a real eval run: a model quoting with a
+    # typographic apostrophe, and one that dropped a pair of parentheses. Both
+    # were genuinely present in the submission, and flagging them as fabricated
+    # is worse than not checking at all -- it teaches faculty to ignore the flag.
+    curly = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "A binary search tree keeps all values in the left subtree "
+                        "smaller than the node\u2019s position"}])],
+        student_text="Q1: A binary search tree keeps all values in the left subtree "
+                     "smaller than the node's position.",
+    )
+    check("a typographic apostrophe still verifies",
+          curly["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    parens = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "storing a linked list or similar bucket"}])],
+        student_text="Q5: ... storing a linked list (or similar bucket) of all entries.",
+    )
+    check("dropped parentheses still verify",
+          parens["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    half = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "A binary search tree keeps ... and the student proved the bound"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("a half-real, half-invented quote is still flagged",
+          half["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
+
     messy = grade(
         [response([(10.0, 10.0)], extras=[{
             "evidence": "AVERAGE-CASE   search\nis O(log n)"}])],

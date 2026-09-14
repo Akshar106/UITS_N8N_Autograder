@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import unicodedata
 
 from app.llm_client import call_reallm
 
@@ -246,10 +247,21 @@ _WHITESPACE_RE = re.compile(r"\s+")
 # The prompt asks for " ... " between fragments of a shortened quote; accept the
 # unicode ellipsis and bare dots too, since models produce all three.
 _ELLIPSIS_RE = re.compile(r"\s*(?:\.\.\.+|…)\s*")
+# Everything that is not a letter, digit or space. Punctuation is dropped from
+# both sides before comparing: a model quoting "node's" as "node's", or leaving
+# out a pair of parentheses, is still quoting the student. Requiring the
+# punctuation to match byte-for-byte produced false "fabricated quote" warnings
+# on quotes that were genuinely present, which is worse than useless -- it
+# trains a faculty member to ignore the flag that catches real fabrication.
+_PUNCTUATION_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
 
 def _normalise(text):
-    return _WHITESPACE_RE.sub(" ", (text or "")).strip().lower()
+    """Fold away everything that can differ without the words differing."""
+    # NFKC first so typographic characters decompose to their plain forms.
+    text = unicodedata.normalize("NFKC", text or "")
+    text = _PUNCTUATION_RE.sub(" ", text)
+    return _WHITESPACE_RE.sub(" ", text).strip().lower()
 
 
 def _quote_is_in(quote, student_text):
@@ -260,21 +272,25 @@ def _quote_is_in(quote, student_text):
     the source turns that from an invisible fabrication into a visible flag, and
     it is the only automatic grounding check available -- everything else about
     the judgment is a matter of opinion.
+
+    Returns (verified, missing_fragment). Comparison ignores case, whitespace and
+    punctuation, so only the sequence of words has to match.
     """
     haystack = _normalise(student_text)
     if not haystack:
         return False
-    # Each fragment of an elided quote has to appear, and in order.
+    # Split on the ellipsis first: normalising would strip the dots and fuse the
+    # fragments into one string that appears nowhere.
     position = 0
-    for fragment in _ELLIPSIS_RE.split(quote):
+    for fragment in _ELLIPSIS_RE.split(quote or ""):
         fragment = _normalise(fragment)
         if not fragment:
             continue
         found = haystack.find(fragment, position)
         if found == -1:
-            return False
+            return False, fragment
         position = found + len(fragment)
-    return True
+    return True, None
 
 
 def _annotate_evidence_and_confidence(data, student_text):
@@ -297,11 +313,16 @@ def _annotate_evidence_and_confidence(data, student_text):
         item["confidence"] = confidence if confidence in CONFIDENCE_LEVELS else DEFAULT_CONFIDENCE
 
         if item["evidence"]:
-            item["evidence_verified"] = _quote_is_in(item["evidence"], student_text)
-            if not item["evidence_verified"]:
+            verified, missing_fragment = _quote_is_in(item["evidence"], student_text)
+            item["evidence_verified"] = verified
+            if not verified:
+                # The failing fragment is the useful half: with a long elided
+                # quote, knowing which piece is absent is the difference between
+                # a two-minute diagnosis and an afternoon of guessing.
                 logger.warning(
-                    "Evidence quote for %r is not present in the submission: %r",
-                    item.get("question"), item["evidence"][:120],
+                    "Evidence quote for %r is not present in the submission.\n"
+                    "  quote    : %s\n  not found: %s",
+                    item.get("question"), item["evidence"], missing_fragment,
                 )
         else:
             # No quote offered. Expected when a question was not attempted;
