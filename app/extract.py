@@ -356,20 +356,29 @@ def _read_pdf(content_bytes):
     result.stats.update({"pages": page_count, "images": images, "tables": tables})
 
     chars = len(result.text.strip())
-    if page_count and chars < _PDF_CHARS_PER_PAGE_FLOOR * page_count:
+    scarce_text = bool(page_count) and chars < _PDF_CHARS_PER_PAGE_FLOOR * page_count
+
+    if images and scarce_text:
         # Almost certainly a scan or a photo exported to PDF: the pages carry
-        # pictures of words, and there is no text layer to read.
-        if images:
-            result.stats["incomplete"] = True
-            result.notes.append(
-                f"This PDF has {page_count} page{'s' if page_count != 1 else ''} but "
-                f"almost no machine-readable text, and does contain images. It is "
-                f"most likely a scan or photographs, which the grader cannot read."
-            )
-        else:
-            result.notes.append(
-                "This PDF contains very little readable text."
-            )
+        # pictures of words, and there is no text layer to read at all.
+        result.stats["incomplete"] = True
+        result.notes.append(
+            f"This PDF has {page_count} page{'s' if page_count != 1 else ''} but "
+            f"almost no machine-readable text, and does contain images. It is "
+            f"most likely a scan or photographs, which the grader cannot read."
+        )
+    elif images:
+        # Readable text AND pictures: the answers were graded, but a diagram or
+        # screenshot among them was not. Saying so is the whole point of these
+        # notes -- silently grading two thirds of a submission is how a student
+        # loses marks for work they actually did.
+        result.notes.append(
+            f"This PDF contains {images} image{'s' if images != 1 else ''}, which the "
+            f"grader cannot read. Anything answered inside them was not graded."
+        )
+    elif scarce_text:
+        result.notes.append("This PDF contains very little readable text.")
+
     if tables:
         result.notes.append(
             f"{tables} table{'s' if tables != 1 else ''} detected; text inside tables "

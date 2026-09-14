@@ -375,7 +375,10 @@ def test_prompt_guards():
     print("\n-- the prompt states the fairness and coverage rules --")
     from app import grading
 
+    # Normalised: the prompt is hard-wrapped, so a phrase under test can be
+    # split across a line break and still be present.
     prompt = grading.SYSTEM_PROMPT
+    flat = " ".join(prompt.split())
     check("the prompt tells the model to ignore grammar and spelling",
           "IGNORE grammar, spelling" in prompt)
     check("the prompt protects non-native English writers",
@@ -392,6 +395,16 @@ def test_prompt_guards():
           "VERBATIM" in prompt and "evidence" in prompt)
     check("the prompt forbids quoting text the student did not write",
           "NEVER quote text that is not in the student's answer" in prompt)
+    check("the prompt separates what the rubric decides from what the model decides",
+          "the rubric sets the bar" in flat.lower())
+    check("the prompt allows differently-worded correct answers",
+          "same idea in different words" in flat)
+    check("the prompt accepts other valid examples after 'such as'",
+          "such as" in flat and "same kind earns the same credit" in flat)
+    check("the prompt still forbids inventing requirements",
+          "never add a requirement it does not state" in flat.lower())
+    check("the prompt ties the loosening back to the evidence quote",
+          "not licence to be generous" in flat)
     check("the prompt asks for an honest confidence level",
           '"high", "medium" or "low"' in prompt and "not a failure" in prompt)
 

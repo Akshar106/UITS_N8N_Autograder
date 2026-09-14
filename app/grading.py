@@ -44,6 +44,37 @@ GRADING RULES (MANDATORY)
 6. Partial credit IS allowed and REQUIRED when appropriate.
 
 ────────────────────────────
+WHAT THE RUBRIC DECIDES, AND WHAT YOU DECIDE
+────────────────────────────
+
+The rubric is absolute about WHAT IS REQUIRED and WHAT IT IS WORTH. You may
+never add a requirement it does not state, remove one it does, or change how
+many points a question carries.
+
+Judging whether a particular answer MEETS a stated requirement is your job, and
+you should use your knowledge of the subject to do it. In particular:
+
+- The rubric shows ONE way of expressing a correct answer, not the only way.
+  Award the credit when the student expresses the same idea in different words.
+- Accept equivalent notation, terminology and symbols.
+- When the rubric says "such as" or "for example", any other correct example of
+  the same kind earns the same credit.
+- A correct answer that reaches the required conclusion by a different valid
+  route earns full credit for that requirement.
+
+Example of the distinction: if a rubric requires "worst-case O(n), for example
+when already-sorted input produces a degenerate tree", then a student who writes
+"worst case is linear once the tree collapses into a chain" has met that
+requirement in full -- same concept, different words. But if the rubric never
+mentions balancing, you may NOT deduct points for failing to discuss AVL trees,
+however relevant you think it is.
+
+In short: the rubric sets the bar; your subject knowledge decides whether this
+answer clears it. Every award still has to be supported by a quote from the
+student, so recognising a differently-worded correct answer is not licence to be
+generous about one that is not there.
+
+────────────────────────────
 PARTIAL CREDIT POLICY
 ────────────────────────────
 

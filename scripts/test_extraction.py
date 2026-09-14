@@ -206,9 +206,15 @@ def test_docx_header_fallback():
 
 # --- .pdf ---------------------------------------------------------------------
 
-def pdf_bytes(lines):
-    """A minimal single-page PDF with a real text layer."""
+TINY_PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08"
+            b"\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00"
+            b"\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
+def pdf_bytes(lines, with_image=False):
+    """A minimal single-page PDF with a real text layer, optionally an image too."""
     from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas as pdf_canvas
 
     buffer = io.BytesIO()
@@ -217,6 +223,8 @@ def pdf_bytes(lines):
     for line in lines:
         c.drawString(72, y, line)
         y -= 18
+    if with_image:
+        c.drawImage(ImageReader(io.BytesIO(TINY_PNG)), 72, 500, width=72, height=72, mask="auto")
     c.save()
     return buffer.getvalue()
 
@@ -237,6 +245,25 @@ def test_pdf():
     multi = read("multi.pdf", pdf_bytes([f"Q{i}: line {i}" for i in range(1, 30)]))
     check("every line of a longer pdf is read",
           all(f"line {i}" in multi.text for i in range(1, 30)))
+
+    # Typed answers plus a diagram: the text grades fine, but the diagram was
+    # skipped and the faculty member has to be told so.
+    mixed = read("mixed.pdf", pdf_bytes([f"Q{i}: {ANSWER_1}" for i in range(1, 12)],
+                                        with_image=True))
+    check("an image alongside readable text is counted", mixed.stats["images"] >= 1)
+    check("an image alongside readable text is reported",
+          any("cannot read" in n for n in mixed.notes))
+    check("text plus an image still grades (not refused)", not mixed.looks_incomplete)
+    check("the text itself is intact", ANSWER_1 in mixed.text)
+
+    # The other side: an image and almost no text is a scan, and is refused.
+    scan = read("scanned.pdf", pdf_bytes(["p1"], with_image=True))
+    check("an image with almost no text is refused as a scan", scan.looks_incomplete)
+
+    plain_sparse = read("sparse.pdf", pdf_bytes(["hi"]))
+    check("sparse text with no images is noted but still graded",
+          not plain_sparse.looks_incomplete
+          and any("very little" in n.lower() for n in plain_sparse.notes))
 
     try:
         read("broken.pdf", b"%PDF-1.4 truncated garbage")

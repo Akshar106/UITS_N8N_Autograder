@@ -2,10 +2,8 @@
   "assignment_name": "DSA Midterm Review",
   "rubric_file": "sample_data/rubric_advanced.txt",
   "total_points": 50,
-
   "label_source": "provisional",
   "label_note": "These expected scores are the project author's estimates, NOT grades assigned by a TA. They are good enough to catch a regression (a grader that starts handing a blank answer 40/50 will fail loudly) and to run the bias probes, but they are NOT evidence of accuracy. Replace them with real TA-assigned scores from a completed assignment before quoting any accuracy number to faculty or to UITS, and set label_source to \"human\" when you do.",
-
   "submissions": [
     {
       "file": "sample_data/submissions_advanced/student_2001.txt",
@@ -38,7 +36,6 @@
       "note": "confident but wrong in places: claims BST worst case is O(log n)"
     }
   ],
-
   "probes": [
     {
       "name": "fluency",
@@ -53,6 +50,13 @@
       "variant": "sample_data/eval/probe_2003_padded.txt",
       "max_delta": 2,
       "why": "The same empty buzzword answers, padded with confident filler. A score rise here means the grader is rewarding volume and tone instead of correctness."
+    },
+    {
+      "name": "rewording",
+      "baseline": "sample_data/submissions_advanced/student_2001.txt",
+      "variant": "sample_data/eval/probe_2001_reworded.txt",
+      "max_delta": 4,
+      "why": "The same correct content, expressed in the student's own vocabulary rather than the rubric's: 'linear' and 'logarithmic' instead of O(n) and O(log n), heapsort instead of the merge sort the rubric names, 'collapses into a chain' instead of the rubric's sorted-input example. A score drop here means the grader is matching the rubric's wording rather than judging whether the requirement was met -- it is marking students down for not writing the answer key back verbatim."
     }
   ]
 }
