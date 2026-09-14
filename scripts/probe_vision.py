@@ -127,8 +127,13 @@ def list_models():
             for name in names:
                 marker = "  <- configured" if name == MODEL else ""
                 print(f"  {name}{marker}")
-            print("\nA model with 'vision', 'vl', '4o', 'omni' or similar in its name is the "
-                  "one to try with --model.")
+            print("\nNames are a poor guide: plenty of general-purpose models take images "
+                  "without saying so, while some that sound multimodal do not.")
+            print("Rule these out without testing: *embedding* and *reranker* (no text "
+                  "output at all), *asr* and *whisper* (speech, not images), and anything "
+                  "that GENERATES images rather than reading them.")
+            print("Test the rest with --model <name>; a code read back out of the picture "
+                  "is the only proof that counts.")
             return True
     print("\nThe gateway did not answer a /models listing; ask the ReaLLM team which "
           "models are available.")
