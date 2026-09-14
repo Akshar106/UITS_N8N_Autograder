@@ -254,6 +254,8 @@ _ELLIPSIS_RE = re.compile(r"\s*(?:\.\.\.+|…)\s*")
 # on quotes that were genuinely present, which is worse than useless -- it
 # trains a faculty member to ignore the flag that catches real fabrication.
 _PUNCTUATION_RE = re.compile(r"[^\w\s]", re.UNICODE)
+# Parenthetical asides, which models skip over when quoting.
+_PARENTHETICAL_RE = re.compile(r"\([^()]{0,200}\)")
 
 
 def _normalise(text):
@@ -262,6 +264,19 @@ def _normalise(text):
     text = unicodedata.normalize("NFKC", text or "")
     text = _PUNCTUATION_RE.sub(" ", text)
     return _WHITESPACE_RE.sub(" ", text).strip().lower()
+
+
+def _haystacks(student_text):
+    """The forms of the submission a quote may legitimately match against.
+
+    The second drops parenthetical asides. Models routinely quote around them --
+    "linear probing (check next slot), quadratic probing" gets quoted as "linear
+    probing, quadratic probing" -- which is still the student's words with an
+    aside skipped, not an invention.
+    """
+    full = _normalise(student_text)
+    without_asides = _normalise(_PARENTHETICAL_RE.sub(" ", student_text or ""))
+    return [h for h in dict.fromkeys([full, without_asides]) if h]
 
 
 def _quote_is_in(quote, student_text):
@@ -273,23 +288,30 @@ def _quote_is_in(quote, student_text):
     it is the only automatic grounding check available -- everything else about
     the judgment is a matter of opinion.
 
+    Each fragment of an elided quote has to appear somewhere in the submission,
+    but NOT in the order the quote lists them. Models group the fragments the
+    rubric's way -- definition, then average case, then worst case -- while the
+    student may have written them in any order, and rejecting that was flagging
+    quotes whose every word was genuinely the student's. Fabrication is still
+    caught, because invented words appear nowhere at all; what is given up is
+    detecting real fragments stitched into a misleading order, which is a rarer
+    failure than the false alarms this was producing.
+
     Returns (verified, missing_fragment). Comparison ignores case, whitespace and
-    punctuation, so only the sequence of words has to match.
+    punctuation, so only the sequence of words within a fragment has to match.
     """
-    haystack = _normalise(student_text)
-    if not haystack:
-        return False
+    haystacks = _haystacks(student_text)
+    if not haystacks:
+        return False, _normalise(quote) or None
+
     # Split on the ellipsis first: normalising would strip the dots and fuse the
     # fragments into one string that appears nowhere.
-    position = 0
     for fragment in _ELLIPSIS_RE.split(quote or ""):
         fragment = _normalise(fragment)
         if not fragment:
             continue
-        found = haystack.find(fragment, position)
-        if found == -1:
+        if not any(fragment in haystack for haystack in haystacks):
             return False, fragment
-        position = found + len(fragment)
     return True, None
 
 

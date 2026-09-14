@@ -87,13 +87,35 @@ def test_evidence_verification():
     check("an elided quote is verified when every fragment is present in order",
           elided["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
 
+    # Order is deliberately not required: models group fragments the rubric's way
+    # (definition, average case, worst case) while the student may have written
+    # them in any order. Rejecting that flagged quotes whose every word was the
+    # student's -- seen twice in a real eval run.
     out_of_order = grade(
         [response([(10.0, 10.0)], extras=[{
             "evidence": "smaller than the node ... A binary search tree keeps"}])],
         student_text=STUDENT_ANSWER,
     )
-    check("fragments quoted out of order are not verified",
-          out_of_order["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
+    check("fragments quoted out of the student's order still verify",
+          out_of_order["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    # A parenthetical aside skipped mid-quote is still the student's words.
+    aside = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "probing like linear probing, quadratic probing, or double hashing"}])],
+        student_text="Q5: probing like linear probing (check the next slot), quadratic "
+                     "probing, or double hashing (a second hash sets the step).",
+    )
+    check("a skipped parenthetical still verifies",
+          aside["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    paraphrase = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "The student demonstrated a clear grasp of collision resolution"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("a plausible paraphrase is still flagged as not the student's words",
+          paraphrase["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
 
     fabricated = grade(
         [response([(10.0, 10.0)], extras=[{
