@@ -37,8 +37,9 @@ is present, use it for both purposes.
 GRADING RULES (MANDATORY)
 ────────────────────────────
 
-1. Grade ONLY using the provided rubric.
-2. Do NOT assume, infer, or invent any rubric content.
+1. The rubric governs wherever it speaks. Where it is silent, grade the answer
+   against the QUESTION using your own knowledge of the subject.
+2. Never invent a requirement the rubric does not state and then deduct for it.
 3. Do NOT reuse or mix questions from other assignments.
 4. If a student answers a DIFFERENT question than the one in the rubric, award 0 points for that question.
 5. The total score MUST be calculated by summing the rubric point values — NEVER assume a fixed total.
@@ -48,12 +49,14 @@ GRADING RULES (MANDATORY)
 WHAT THE RUBRIC DECIDES, AND WHAT YOU DECIDE
 ────────────────────────────
 
-The rubric is absolute about WHAT IS REQUIRED and WHAT IT IS WORTH. You may
-never add a requirement it does not state, remove one it does, or change how
-many points a question carries.
+The rubric is absolute about WHAT IS WORTH HOW MUCH. Never change the number of
+questions or the marks on any of them.
 
-Judging whether a particular answer MEETS a stated requirement is your job, and
-you should use your knowledge of the subject to do it. In particular:
+Beyond that, how much detail the rubric gives varies, and your job changes with it.
+
+CASE 1 -- the rubric states what earns the marks.
+Judge whether this answer meets that stated requirement, using your knowledge of
+the subject to recognise it however it is expressed:
 
 - The rubric shows ONE way of expressing a correct answer, not the only way.
   Award the credit when the student expresses the same idea in different words.
@@ -70,10 +73,83 @@ requirement in full -- same concept, different words. But if the rubric never
 mentions balancing, you may NOT deduct points for failing to discuss AVL trees,
 however relevant you think it is.
 
-In short: the rubric sets the bar; your subject knowledge decides whether this
-answer clears it. Every award still has to be supported by a quote from the
-student, so recognising a differently-worded correct answer is not licence to be
-generous about one that is not there.
+CASE 2 -- the rubric names a criterion but not the standard.
+"Write a function that reverses a linked list (10 points)" tells you what is
+being asked and what it is worth, and nothing about what correct looks like.
+Supply that yourself. Correctness is ALWAYS implicitly required: an answer that
+does not work has not met the requirement, whether or not the rubric says so.
+
+CASE 3 -- the rubric says nothing about a question, or there is no rubric.
+Grade against the question as asked, on subject-matter correctness, and award
+the marks the question carries.
+
+THE ONE ASYMMETRY THAT MATTERS
+
+Use your knowledge freely to AWARD credit -- to recognise a correct answer the
+rubric did not anticipate, an equivalent method, a valid alternative example.
+
+Be far more careful using it to DEDUCT. You may deduct for something that is
+actually WRONG: a false statement, code that does not work, an analysis that
+contradicts itself. You may NOT deduct because an answer omits something you
+would have included, is less thorough than you would like, uses a library or
+style you would not have chosen, or could have been optimised further. If the
+rubric did not ask for it and its absence does not make the answer incorrect, it
+costs nothing.
+
+The reason is fairness: a grade a student cannot predict from the assignment and
+the rubric is a grade nobody can defend.
+
+────────────────────────────
+GRADING CODE
+────────────────────────────
+
+When an answer contains code, judge whether the code WORKS, by reading it:
+
+- Trace the logic. Would it produce the required behaviour on ordinary input,
+  and on the obvious edge cases (empty input, a single element, a zero divisor)?
+- Faults that stop it working cost marks: wrong operator or direction, an
+  off-by-one, an undefined name, a variable used before assignment, a call that
+  does not do what the author thinks, a method applied to the wrong type.
+- Any approach that works earns full credit. Do not require a specific library,
+  function or idiom unless the rubric names one; do not reward the approach you
+  would have picked over an equally correct one.
+- Ignore naming, formatting, comments and language style entirely.
+- Ignore efficiency unless the question or rubric asks about it -- a correct
+  O(n^2) answer to a question that never mentioned complexity is correct.
+- Judge the code the student wrote against the task, not against the prose next
+  to it. Code that contradicts its own explanation is a fault in one of them:
+  say which, and grade each criterion on its own evidence.
+
+────────────────────────────
+OPEN-ENDED AND ANALYTICAL ANSWERS
+────────────────────────────
+
+Some questions have several defensible answers. Where the rubric does not name
+one, grade the REASONING, not the conclusion:
+
+- A well-argued position you disagree with earns full credit.
+- An unsupported assertion earns little, even when you happen to agree with it.
+- Credit reasoning that engages with the specifics of the question or dataset;
+  a generic statement that would fit any assignment shows nothing.
+- Factual errors cost marks whatever conclusion they support.
+
+────────────────────────────
+SAY WHAT YOU GRADED AGAINST
+────────────────────────────
+
+Give each question a "basis" of exactly:
+
+  "rubric"    -- the rubric stated what earns the marks and you applied it
+  "knowledge" -- the rubric was silent on the standard, so you judged the answer
+                 on subject-matter correctness yourself
+  "both"      -- the rubric set part of the standard and you supplied the rest
+
+Be accurate. A faculty member reviewing a "knowledge" judgment is checking your
+subject expertise rather than their own rubric, and they need to know which one
+they are looking at.
+
+Every award still has to be supported by a quote from the student, whichever
+basis you used.
 
 ────────────────────────────
 PARTIAL CREDIT POLICY
@@ -192,6 +268,7 @@ Return ONLY valid JSON in the following format:
       "awarded_points": number,
       "evidence": string,
       "missing": string,
+      "basis": "rubric" | "knowledge" | "both",
       "confidence": "high" | "medium" | "low",
       "comment": string
     }
@@ -242,6 +319,12 @@ POINT_TOLERANCE = 0.01
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
 DEFAULT_CONFIDENCE = "medium"
+
+# What the grader judged a question against. Defaults to "rubric" when a model
+# omits it, which is the conservative reading: it does not claim the grader went
+# beyond the instructor's stated standard when we cannot tell.
+BASIS_VALUES = ("rubric", "knowledge", "both")
+DEFAULT_BASIS = "rubric"
 
 _WHITESPACE_RE = re.compile(r"\s+")
 # The prompt asks for " ... " between fragments of a shortened quote; accept the
@@ -334,6 +417,10 @@ def _annotate_evidence_and_confidence(data, student_text):
         confidence = confidence.strip().lower() if isinstance(confidence, str) else ""
         item["confidence"] = confidence if confidence in CONFIDENCE_LEVELS else DEFAULT_CONFIDENCE
 
+        basis = item.get("basis")
+        basis = basis.strip().lower() if isinstance(basis, str) else ""
+        item["basis"] = basis if basis in BASIS_VALUES else DEFAULT_BASIS
+
         if item["evidence"]:
             verified, missing_fragment = _quote_is_in(item["evidence"], student_text)
             item["evidence_verified"] = verified
@@ -360,6 +447,12 @@ def _annotate_evidence_and_confidence(data, student_text):
         weakest = "low"
 
     data["confidence"] = weakest
+    # Surfaced on the row so faculty can find the judgments made on the grader's
+    # own subject knowledge rather than on their rubric -- those are the ones
+    # where they are checking someone else's expertise, not their own standard.
+    data["knowledge_judgments"] = sum(
+        1 for item in data["per_question_breakdown"] if item["basis"] in ("knowledge", "both")
+    )
 
 
 def _recompute_totals(data):

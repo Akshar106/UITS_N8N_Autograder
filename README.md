@@ -108,6 +108,12 @@ estimated**: each rubric question is split into weighted sub-parts, every
 submission was written against a spec saying which sub-parts it satisfies (1,
 0.5 or 0), and the expected score is the weighted sum. A disagreement is then
 traceable to a specific requirement instead of to a number somebody guessed.
+`labels_sparse.json` grades the *same* ML submissions against a rubric giving only
+the questions and their marks — no criteria at all — with the same expected
+scores, because the work has not changed, only the help the grader was given.
+Comparing the two runs is how you find out whether the grader can judge
+correctness on its own or is merely checking answers against supplied criteria.
+
 Two submissions exist purely to catch known failure modes — one whose prose
 describes data leakage perfectly while its own code commits it, and one that is
 fully correct by an unconventional route and should score the same as the model

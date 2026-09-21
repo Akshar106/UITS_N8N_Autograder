@@ -111,6 +111,16 @@
                   {% for note in s.notes %}{{ note }}{% if not loop.last %}<br>{% endif %}{% endfor %}
                 </span>
               {% endif %}
+              {% if s.knowledge_judgments %}
+                {# Not a warning -- a pointer. These marks rest on the grader's
+                   subject knowledge because the rubric did not set a standard,
+                   so the faculty member is checking expertise rather than their
+                   own criteria. #}
+                <span class="note note-info">
+                  {{ s.knowledge_judgments }} mark{{ 's' if s.knowledge_judgments != 1 }}
+                  judged on subject knowledge, not your rubric.
+                </span>
+              {% endif %}
               {% if s.unverified_quotes %}
                 <span class="note note-error">
                   {{ s.unverified_quotes }} quote{{ 's' if s.unverified_quotes != 1 }} could not be
@@ -129,6 +139,9 @@
                         <strong>{{ q.question }}</strong> — {{ q.awarded_points }}/{{ q.max_points }}
                         {% if q.confidence and q.confidence != 'high' %}
                           <span class="badge badge-{{ q.confidence }}">{{ q.confidence }}</span>
+                        {% endif %}
+                        {% if q.basis in ('knowledge', 'both') %}
+                          <span class="badge badge-info">{{ 'own knowledge' if q.basis == 'knowledge' else 'rubric + knowledge' }}</span>
                         {% endif %}
                         <br>{{ q.comment }}
                         {#

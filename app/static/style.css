@@ -72,6 +72,7 @@ th {
 .note-error { background: #fce8e6; color: #611a15; }
 /* Amber, not red: the grade is usable but the file was not read completely. */
 .note-warn  { background: #fef7e0; color: #5c4400; }
+.note-info  { background: #e3ecf7; color: #1f3864; }
 
 /* Confidence badge. Only medium/low are shown per question -- "high" on every
    row of a 200-row table is noise, so its absence carries the meaning. */
@@ -88,6 +89,8 @@ th {
 .badge-high   { background: #e6f4ea; color: #1e4620; }
 .badge-medium { background: #fef7e0; color: #5c4400; }
 .badge-low    { background: #fce8e6; color: #611a15; }
+/* Informational, not a problem: blue rather than amber or red. */
+.badge-info   { background: #e3ecf7; color: #1f3864; }
 
 /* The student's own words, so they read as a quotation and not as the app's
    own prose. */

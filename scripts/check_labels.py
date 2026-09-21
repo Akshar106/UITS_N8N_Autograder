@@ -78,7 +78,7 @@ def check_one(path):
 
 def main():
     targets = ([Path(a) for a in sys.argv[1:]]
-               or sorted(ROOT.glob("sample_data/**/labels.json")))
+               or sorted(ROOT.glob("sample_data/**/labels*.json")))
     problems = []
     for target in targets:
         problems += check_one(target if target.is_absolute() else ROOT / target)

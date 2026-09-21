@@ -202,6 +202,30 @@ def test_confidence():
           result["data"]["confidence"] == "high")
 
 
+def test_basis():
+    print("\n-- what each judgment was graded against --")
+
+    result = grade([response(
+        [(10.0, 10.0), (5.0, 10.0), (8.0, 10.0)],
+        extras=[{"basis": "rubric"}, {"basis": "KNOWLEDGE"}, {"basis": "both"}],
+    )])
+    bases = [q["basis"] for q in result["data"]["per_question_breakdown"]]
+    check("valid basis values are kept", bases == ["rubric", "knowledge", "both"])
+    check("basis is case-insensitive", bases[1] == "knowledge")
+    check("knowledge and both are counted for the row",
+          result["data"]["knowledge_judgments"] == 2)
+
+    result = grade([response([(10.0, 10.0)], extras=[{"basis": "vibes"}])])
+    check("a nonsense basis falls back to rubric",
+          result["data"]["per_question_breakdown"][0]["basis"] == "rubric")
+
+    result = grade([response([(10.0, 10.0)])])
+    check("a missing basis defaults to rubric -- the conservative reading",
+          result["data"]["per_question_breakdown"][0]["basis"] == "rubric")
+    check("a rubric-only row counts no knowledge judgments",
+          result["data"]["knowledge_judgments"] == 0)
+
+
 def test_anchor_examples():
     print("\n-- calibration against the instructor's own grading --")
     from app import grading
@@ -448,15 +472,40 @@ def test_prompt_guards():
     check("the prompt forbids quoting text the student did not write",
           "NEVER quote text that is not in the student's answer" in prompt)
     check("the prompt separates what the rubric decides from what the model decides",
-          "the rubric sets the bar" in flat.lower())
+          "The rubric is absolute about WHAT IS WORTH HOW MUCH" in flat)
     check("the prompt allows differently-worded correct answers",
           "same idea in different words" in flat)
     check("the prompt accepts other valid examples after 'such as'",
           "such as" in flat and "same kind earns the same credit" in flat)
-    check("the prompt still forbids inventing requirements",
-          "never add a requirement it does not state" in flat.lower())
-    check("the prompt ties the loosening back to the evidence quote",
-          "not licence to be generous" in flat)
+    check("the prompt forbids changing the marks on a question",
+          "Never change the number of questions or the marks on any of them" in flat)
+    check("the prompt ties every basis back to the evidence quote",
+          "Every award still has to be supported by a quote from the student, whichever basis"
+          in flat)
+    print("\n-- the prompt covers rubric-silent questions, code and open analysis --")
+    check("the prompt says to use own knowledge where the rubric is silent",
+          "Where it is silent, grade the answer against the QUESTION using your own knowledge"
+          in flat)
+    check("the prompt forbids inventing a requirement then deducting for it",
+          "Never invent a requirement the rubric does not state and then deduct for it" in flat)
+    check("the prompt makes correctness implicitly required",
+          "Correctness is ALWAYS implicitly required" in flat)
+    check("the prompt states the award/deduct asymmetry",
+          "Use your knowledge freely to AWARD credit" in flat
+          and "Be far more careful using it to DEDUCT" in flat)
+    check("the prompt lists what may NOT be deducted for",
+          "less thorough than you would like" in flat and "could have been optimised further" in flat)
+    check("the prompt tells the grader to trace code logic",
+          "Trace the logic" in flat and "off-by-one" in flat)
+    check("the prompt ignores code style and unasked-for efficiency",
+          "Ignore naming, formatting, comments and language style" in flat
+          and "Ignore efficiency unless the question or rubric asks" in flat)
+    check("the prompt judges code separately from the prose beside it",
+          "Code that contradicts its own explanation" in flat)
+    check("the prompt grades open questions on reasoning, not conclusion",
+          "A well-argued position you disagree with earns full credit" in flat)
+    check("the prompt requires the basis to be declared",
+          '"basis" of exactly' in flat)
     check("the prompt asks for an honest confidence level",
           '"high", "medium" or "low"' in prompt and "not a failure" in prompt)
 
@@ -468,6 +517,7 @@ def main():
     test_retries()
     test_evidence_verification()
     test_confidence()
+    test_basis()
     test_anchor_examples()
     test_llm_client()
     test_prompt_guards()
