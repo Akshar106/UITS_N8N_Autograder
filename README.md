@@ -31,6 +31,7 @@ CANVAS_OAUTH_SCOPES=
 REALLM_API_KEY=
 REALLM_URL=
 REALLM_MODEL_NAME=
+GRADING_PASSES=2
 DATABASE_PATH=instance/autograder.sqlite3
 ```
 
@@ -46,6 +47,7 @@ What each value is:
 - `CANVAS_BASE_URL`, `CANVAS_CLIENT_ID`, `CANVAS_CLIENT_SECRET` — from the Canvas Developer Key (UITS/Erik). Redirect URI is `http://localhost:8000/oauth/callback`. Note the Dev Key currently lives on the Canvas **Test** instance, not production — confirm the exact domain when you receive credentials.
 - `CANVAS_OAUTH_SCOPES` — space-separated scopes, only needed if the Developer Key enforces scopes.
 - `REALLM_API_KEY`, `REALLM_URL`, `REALLM_MODEL_NAME` — your existing ReaLLM setup.
+- `GRADING_PASSES` — how many independent gradings to take of each submission (default 2). Where the passes agree, that is the score; where they differ, the score is their midpoint and the row is pushed to the top of the review queue. Two passes of the same model share its biases, so this does not fix calibration — what it gives is a *measured* uncertainty signal, which matters because the model's self-reported confidence proved close to worthless. Set to 1 to halve the cost.
 - `FLASK_SECRET_KEY` — any random string for signing the session cookie.
 - `APP_ENV` — leave as `development` locally; set to `production` on the deployed (Azure) instance, which turns on secure (HTTPS-only) session cookies.
 
@@ -91,6 +93,7 @@ grading?", so run it before and after any change to the prompt or the model:
 ```bash
 python3 scripts/eval_grading.py              # accuracy + bias probes
 python3 scripts/eval_grading.py --repeats 3  # also check the score is reproducible
+python3 scripts/eval_grading.py --passes 2   # grade twice and merge, as the app does
 ```
 
 Three label sets ship with the repo:

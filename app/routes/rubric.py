@@ -220,6 +220,7 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                             data.get("score_awarded"), data.get("total_points"), data.get("overall_feedback"),
                             _dump_breakdown(data.get("per_question_breakdown")),
                             ai_confidence=data.get("confidence"),
+                            ai_disagreement=data.get("max_disagreement"),
                             extraction_notes=notes_text,
                             submission_attempt=attempt, submitted_at=submitted_at,
                         )

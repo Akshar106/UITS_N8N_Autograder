@@ -314,9 +314,10 @@ def test_triage_ordering():
 
     print("\n-- the review queue is ordered by what needs attention --")
 
-    def row(name, confidence=None, error=None, stale=0, notes=None):
-        return {"student_name": name, "ai_confidence": confidence,
-                "ai_error": error, "review_stale": stale, "extraction_notes": notes}
+    def row(name, confidence=None, error=None, stale=0, notes=None, disagreement=None):
+        return {"student_name": name, "ai_confidence": confidence, "ai_error": error,
+                "review_stale": stale, "extraction_notes": notes,
+                "ai_disagreement": disagreement}
 
     check("a failed row is top priority",
           _attention_bucket(row("a", error="could not read file")) == "error")
@@ -330,6 +331,12 @@ def test_triage_ordering():
     # matter how sure the model said it was.
     check("an extraction warning overrides high confidence",
           _attention_bucket(row("a", confidence="high", notes="2 images unreadable")) == "low")
+    # Measured disagreement between two readings beats the model's own claim of
+    # certainty -- the claim proved close to worthless in practice.
+    check("disagreement between passes overrides high confidence",
+          _attention_bucket(row("a", confidence="high", disagreement=3.0)) == "low")
+    check("no disagreement leaves the reported confidence alone",
+          _attention_bucket(row("a", confidence="high", disagreement=0.0)) == "high")
 
     rows = [
         row("Eve", confidence="high"),

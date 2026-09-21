@@ -17,6 +17,7 @@ COLUMNS = [
     ("Percentage", "percentage"),
     ("Approved", "approved_label"),
     ("AI Confidence", "ai_confidence"),
+    ("Pass Disagreement", "ai_disagreement"),
     ("Attempt", "submission_attempt"),
     ("Needs Re-Review", "stale_label"),
     ("Extraction Warnings", "extraction_notes"),
@@ -51,6 +52,7 @@ def build_grades_workbook(assignment_name, submissions):
             "percentage": percentage,
             "approved_label": "Yes" if s["approved"] else "No",
             "ai_confidence": s.get("ai_confidence") or "",
+            "ai_disagreement": s.get("ai_disagreement"),
             "submission_attempt": s.get("submission_attempt"),
             # Carried into the sheet as well as the web page: whoever transcribes
             # these into Canvas may not be the person who ran the grading, and

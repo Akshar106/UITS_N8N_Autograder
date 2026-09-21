@@ -53,12 +53,116 @@ GOOD = [(10.0, 10.0), (7.0, 10.0), (4.0, 10.0), (0.0, 10.0), (10.0, 10.0)]
 
 
 def grade(raw_responses, student_text="answer", **kwargs):
-    """Run grade_submission against a scripted sequence of model replies."""
+    """Run grade_submission against a scripted sequence of model replies.
+
+    Single-pass unless the caller asks otherwise, so each guard is exercised on
+    one response rather than on a merge of two.
+    """
     from app import grading
 
+    kwargs.setdefault("passes", 1)
     replies = list(raw_responses)
     with mock.patch.object(grading, "call_reallm", side_effect=lambda *a: replies.pop(0)):
         return grading.grade_submission("DSA", "rubric", "1", student_text, **kwargs)
+
+
+def test_ceiling():
+    """A score above the paper's total must be impossible, by two routes.
+
+    After recomputation the ceiling cannot actually be breached -- both totals
+    derive from the same per-question awards, each already capped at its own
+    maximum -- so the explicit assertion is defence in depth against a future
+    edit reordering those steps. It is therefore tested directly, and the
+    end-to-end path is tested for the behaviour that matters: a model claiming
+    an impossible score has that claim corrected rather than believed.
+    """
+    from app.grading import _validate_breakdown
+
+    print("\n-- a score can never exceed the paper --")
+
+    impossible = {"total_points": 50.0, "score_awarded": 60.0,
+                  "per_question_breakdown": [
+                      {"question": "Q1", "max_points": 50.0, "awarded_points": 60.0}]}
+    try:
+        _validate_breakdown(impossible)
+        check("the ceiling assertion fires", False)
+    except ValueError as exc:
+        check("the ceiling assertion fires", "out of a possible" in str(exc)
+              or "out of a maximum" in str(exc))
+
+    at_ceiling = {"total_points": 50.0, "score_awarded": 50.0,
+                  "per_question_breakdown": [
+                      {"question": "Q1", "max_points": 50.0, "awarded_points": 50.0}]}
+    _validate_breakdown(at_ceiling)
+    check("exactly full marks is allowed", True)
+
+    # End to end: a model claiming 60 out of 50 on a breakdown worth 10 has both
+    # numbers replaced by the breakdown's own arithmetic.
+    inflated_claim = json.dumps({
+        "Assignment": "DSA", "student_id": "1",
+        "total_points": 50.0, "score_awarded": 60.0,
+        "per_question_breakdown": [
+            {"question": "Q1", "max_points": 10.0, "awarded_points": 10.0, "comment": "c"}],
+        "overall_feedback": "f"})
+    data = grade([inflated_claim])["data"]
+    check("an inflated claim is corrected to the breakdown's arithmetic",
+          data["score_awarded"] == 10.0 and data["total_points"] == 10.0)
+
+    check("a legitimate full-marks answer is fine",
+          grade([response([(10.0, 10.0), (10.0, 10.0)])])["ok"])
+
+
+def test_adjudication():
+    print("\n-- two independent readings, compared --")
+
+    agree = response([(10.0, 10.0), (6.0, 10.0)], extras=[{"confidence": "high"}] * 2)
+    result = grade([agree, agree], passes=2)
+    data = result["data"]
+    check("two agreeing passes keep the agreed score", data["score_awarded"] == 16.0)
+    check("agreement reports no disagreement", data["max_disagreement"] == 0.0)
+    check("agreement keeps the confidence the passes reported", data["confidence"] == "high")
+    check("the number of passes is recorded", data["passes"] == 2)
+
+    first = response([(10.0, 10.0), (4.0, 10.0)],
+                     extras=[{"confidence": "high", "comment": "A"},
+                             {"confidence": "high", "comment": "harsh read"}])
+    second = response([(10.0, 10.0), (8.0, 10.0)],
+                      extras=[{"confidence": "high", "comment": "A"},
+                              {"confidence": "high", "comment": "generous read"}])
+    data = grade([first, second], passes=2)["data"]
+    q2 = data["per_question_breakdown"][1]
+    check("a disagreed question takes the midpoint", q2["awarded_points"] == 6.0)
+    check("the disagreement is recorded on the question", q2["disagreement"] == 4.0)
+    check("a disagreed question is forced to low confidence", q2["confidence"] == "low")
+    check("an agreed question keeps its own confidence",
+          data["per_question_breakdown"][0]["confidence"] == "high")
+    check("the row reports the worst disagreement", data["max_disagreement"] == 4.0)
+    check("the row is forced to low confidence", data["confidence"] == "low")
+    check("the totals are recomputed from the merged awards", data["score_awarded"] == 16.0)
+    check("the commentary comes from the pass nearest the merged award",
+          q2["comment"] in ("harsh read", "generous read"))
+
+    # A pass that fails validation must not drag the submission down with it.
+    bad = response([(99.0, 10.0)])
+    good = response([(10.0, 10.0), (6.0, 10.0)])
+    result = grade([bad, bad, bad, good], passes=2)
+    check("one failed pass falls back to the one that worked", result["ok"])
+    check("a single usable pass reports no disagreement",
+          result["data"]["max_disagreement"] == 0.0)
+
+    result = grade([bad] * 6, passes=2)
+    check("both passes failing is still an error", not result["ok"])
+
+    # Passes that disagree on the NUMBER of questions cannot be compared
+    # position by position, so the whole row goes to a human.
+    three = response([(10.0, 10.0), (5.0, 10.0), (5.0, 10.0)])
+    two = response([(10.0, 10.0), (10.0, 10.0)])
+    data = grade([three, two], passes=2)["data"]
+    check("a structural disagreement is flagged", data["structural_disagreement"] is True)
+    check("a structural disagreement forces low confidence", data["confidence"] == "low")
+
+    check("a single pass still works and reports one pass",
+          grade([response(GOOD)], passes=1)["data"]["passes"] == 1)
 
 
 STUDENT_ANSWER = (
@@ -420,8 +524,13 @@ def test_retries():
         return response(GOOD)
 
     with mock.patch.object(grading, "call_reallm", side_effect=counting):
-        grading.grade_submission("DSA", "r", "1", "a")
+        grading.grade_submission("DSA", "r", "1", "a", passes=1)
     check("a good response is not retried", len(calls) == 1)
+
+    calls.clear()
+    with mock.patch.object(grading, "call_reallm", side_effect=counting):
+        grading.grade_submission("DSA", "r", "1", "a", passes=2)
+    check("two passes cost exactly two calls when both succeed", len(calls) == 2)
 
 
 class FakeResponse:
@@ -564,6 +673,8 @@ def test_prompt_guards():
 def main():
     test_arithmetic()
     test_impossible_scores()
+    test_ceiling()
+    test_adjudication()
     test_rubric_coverage()
     test_retries()
     test_evidence_verification()

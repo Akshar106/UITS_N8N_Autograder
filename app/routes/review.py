@@ -27,6 +27,11 @@ def _attention_bucket(submission):
     # model thought of its own certainty.
     if submission["extraction_notes"]:
         return "low"
+    # Two independent readings that landed on different numbers is the strongest
+    # uncertainty signal available, and unlike the model's self-assessment it is
+    # measured rather than claimed.
+    if (submission["ai_disagreement"] or 0) > 0:
+        return "low"
     return submission["ai_confidence"] or "medium"
 
 

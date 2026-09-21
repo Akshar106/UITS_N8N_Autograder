@@ -1,5 +1,7 @@
+import copy
 import json
 import logging
+import os
 import re
 import unicodedata
 
@@ -524,6 +526,11 @@ def _validate_breakdown(data, expected_criteria=None, expected_total=None):
                     f"{expected_points} points but the response used {item['max_points']}"
                 )
 
+    if data["score_awarded"] > data["total_points"] + POINT_TOLERANCE:
+        raise ValueError(
+            f"awarded {data['score_awarded']} out of a possible {data['total_points']}"
+        )
+
     if expected_total is not None and abs(data["total_points"] - expected_total) > POINT_TOLERANCE:
         raise ValueError(
             f"rubric totals {expected_total} points but the response graded out of "
@@ -622,6 +629,76 @@ def _parse_llm_json(raw_text, student_text="", expected_criteria=None, expected_
     return data
 
 
+# How many independent grades to take of each submission. Two passes of the same
+# model are not independent of its biases -- both will be equally generous on a
+# thin rubric -- but they do disagree on genuinely ambiguous answers, and that
+# disagreement is a MEASURED uncertainty signal rather than a self-reported one.
+# The model's own confidence proved close to useless: it reported "high" on
+# submissions it scored thirty points away from.
+GRADING_PASSES = max(1, int(os.getenv("GRADING_PASSES", "2")))
+
+
+def _merge_passes(datas):
+    """Combine independent grades of the same submission.
+
+    Where the passes agree, the score is that agreed value. Where they differ,
+    the award is their mean and the question is marked low confidence, which
+    pushes the row to the top of the review queue -- the disagreement is the
+    point, not something to average quietly away.
+    """
+    merged = copy.deepcopy(datas[0])
+    breakdown = merged["per_question_breakdown"]
+
+    sizes = {len(d["per_question_breakdown"]) for d in datas}
+    if len(sizes) > 1:
+        # The passes did not even agree on how many questions there are, so
+        # there is no per-question comparison to make. Keep the first grade and
+        # send the whole row to a human.
+        logger.warning("Grading passes disagreed on structure: %s questions", sorted(sizes))
+        for item in breakdown:
+            item["confidence"] = "low"
+        merged.update(passes=len(datas), max_disagreement=None, structural_disagreement=True)
+        merged["confidence"] = "low"
+        return merged
+
+    worst = 0.0
+    for index, item in enumerate(breakdown):
+        awards = [d["per_question_breakdown"][index]["awarded_points"] for d in datas]
+        spread = max(awards) - min(awards)
+        mean = sum(awards) / len(awards)
+        worst = max(worst, spread)
+
+        # The commentary comes from whichever pass landed nearest the merged
+        # award, so the explanation a faculty member reads matches the number
+        # beside it instead of arguing with it.
+        nearest = min(datas, key=lambda d: abs(d["per_question_breakdown"][index]["awarded_points"] - mean))
+        source = nearest["per_question_breakdown"][index]
+        for field in ("comment", "evidence", "missing", "evidence_verified", "basis"):
+            item[field] = source.get(field)
+
+        item["awarded_points"] = round(mean, 2)
+        item["disagreement"] = round(spread, 2)
+        item["confidence"] = (
+            "low" if spread > POINT_TOLERANCE
+            else min((d["per_question_breakdown"][index]["confidence"] for d in datas),
+                     key=CONFIDENCE_LEVELS.index)
+        )
+
+    merged["score_awarded"] = round(sum(i["awarded_points"] for i in breakdown), 2)
+    merged["total_points"] = round(sum(i["max_points"] for i in breakdown), 2)
+    nearest_overall = min(datas, key=lambda d: abs(d["score_awarded"] - merged["score_awarded"]))
+    merged["overall_feedback"] = nearest_overall.get("overall_feedback", "")
+
+    merged["confidence"] = min((i["confidence"] for i in breakdown), key=CONFIDENCE_LEVELS.index)
+    if any(i.get("evidence_verified") is False for i in breakdown):
+        merged["confidence"] = "low"
+    merged["knowledge_judgments"] = sum(
+        1 for i in breakdown if i["basis"] in ("knowledge", "both"))
+    merged.update(passes=len(datas), max_disagreement=round(worst, 2),
+                  structural_disagreement=False)
+    return merged
+
+
 # A malformed or self-inconsistent response is usually a one-off. Retrying is
 # much better than marking a real student ungradable, but the count is bounded
 # so a genuinely broken rubric surfaces as an error instead of looping.
@@ -629,7 +706,33 @@ GRADING_ATTEMPTS = 3
 
 
 def grade_submission(assignment_name, rubric_text, student_id, student_text,
-                     expected_criteria=None, expected_total=None, anchors=None):
+                     expected_criteria=None, expected_total=None, anchors=None,
+                     passes=None):
+    """Grade a submission, taking `passes` independent readings of it.
+
+    With passes > 1 the readings are compared question by question: agreement
+    becomes the score, disagreement becomes the score's midpoint plus a low
+    confidence flag that routes the row to a human. See _merge_passes.
+    """
+    passes = GRADING_PASSES if passes is None else max(1, passes)
+    results = [
+        _grade_once(assignment_name, rubric_text, student_id, student_text,
+                    expected_criteria, expected_total, anchors)
+        for _ in range(passes)
+    ]
+    usable = [r for r in results if r["ok"]]
+    if not usable:
+        return results[-1]
+    if len(usable) == 1:
+        data = usable[0]["data"]
+        data.update(passes=1, max_disagreement=0.0, structural_disagreement=False)
+        return usable[0]
+    return {"ok": True, "error": None, "raw": usable[0]["raw"],
+            "data": _merge_passes([r["data"] for r in usable])}
+
+
+def _grade_once(assignment_name, rubric_text, student_id, student_text,
+                expected_criteria=None, expected_total=None, anchors=None):
     """Calls the LLM and returns a dict:
     {ok: bool, data: {...schema...} | None, error: str | None, raw: str | None}
 

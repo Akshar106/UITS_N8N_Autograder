@@ -83,9 +83,11 @@ def resolve_expected_totals(spec):
         entry["expected_total"] = round(sum(parts[k] * v for k, v in satisfies.items()), 1)
 
 
-def grade_once(assignment_name, rubric_text, student_id, student_text, expected_total):
+def grade_once(assignment_name, rubric_text, student_id, student_text, expected_total,
+               passes=1):
     result = grading.grade_submission(
-        assignment_name, rubric_text, student_id, student_text, expected_total=expected_total
+        assignment_name, rubric_text, student_id, student_text,
+        expected_total=expected_total, passes=passes,
     )
     if not result["ok"]:
         return None, result["error"]
@@ -97,7 +99,8 @@ def grade_repeatedly(spec, text, student_id, repeats):
     scores, errors, quality = [], [], {}
     for _ in range(repeats):
         data, error = grade_once(
-            spec["assignment_name"], spec["rubric_text"], student_id, text, spec["total_points"]
+            spec["assignment_name"], spec["rubric_text"], student_id, text,
+            spec["total_points"], passes=spec.get("_passes", 1),
         )
         if error:
             errors.append(error)
@@ -111,6 +114,7 @@ def grade_repeatedly(spec, text, student_id, repeats):
             "questions": len(breakdown),
             "quoted": sum(1 for q in breakdown if q.get("evidence")),
             "unverified": sum(1 for q in breakdown if q.get("evidence_verified") is False),
+            "disagreement": data.get("max_disagreement"),
         }
     return scores, errors, quality
 
@@ -181,6 +185,8 @@ def summarise(rows):
         "questions_quoted": sum(r.get("quoted", 0) for r in graded),
         "quotes_unverified": sum(r.get("unverified", 0) for r in graded),
         "low_confidence_rows": sum(1 for r in graded if r.get("confidence") == "low"),
+        "rows_with_disagreement": sum(1 for r in graded if (r.get("disagreement") or 0) > 0),
+        "worst_disagreement": max((r.get("disagreement") or 0) for r in graded),
     }
 
 
@@ -219,6 +225,9 @@ def print_report(spec, rows, probes, summary, repeats):
               f"cited the student's words, {summary['quotes_unverified']} quote(s) not found in "
               f"the submission")
         print(f"  triage: {summary['low_confidence_rows']} row(s) reported low confidence")
+        if repeats and summary.get("worst_disagreement"):
+            print(f"  adjudication: {summary['rows_with_disagreement']} row(s) where the "
+                  f"passes differed, worst {summary['worst_disagreement']} points")
 
     if probes:
         print("\nBIAS PROBES  (same content, different writing)")
@@ -254,12 +263,16 @@ def main():
     parser.add_argument("--repeats", type=int, default=1,
                         help="grade each submission N times to measure run-to-run spread")
     parser.add_argument("--out", help="write the full results as JSON")
+    parser.add_argument("--passes", type=int, default=1,
+                        help="independent gradings per submission, compared and merged "
+                             "(the app defaults to 2; 1 here keeps runs comparable)")
     parser.add_argument("--skip-probes", action="store_true")
     args = parser.parse_args()
 
     spec = json.loads((REPO_ROOT / args.labels).read_text())
     spec["rubric_text"] = read_text(spec["rubric_file"])
     resolve_expected_totals(spec)
+    spec["_passes"] = args.passes
 
     print(f"Grading {len(spec['submissions'])} submission(s) against {spec['rubric_file']}")
     rows = evaluate_submissions(spec, args.repeats)
