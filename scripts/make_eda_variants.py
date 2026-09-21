@@ -11,8 +11,16 @@ actually produce:
 
   eda_02  Steps 3 and 6 written but never executed -- the single judgment a
           notebook grader has to make that a document grader never does.
-  eda_03  Step 3 raises. Code that crashes did not do the step.
+  eda_03  Step 6's heatmap call raises, so no heatmap exists. The criterion
+          asks for the plot, so the step is not done.
   eda_04  Steps 8 and 9 simply absent.
+  eda_05  Step 3's drop_duplicates call raises -- and it does NOT cost marks.
+          The criterion is conditional ("IF duplicates are identified,
+          eliminate them") and this dataset has none, which the student's own
+          duplicated().sum() output shows. The crashed call was a no-op, so a
+          grader that deducts here is punishing a traceback rather than reading
+          the criterion. eda_03 and eda_05 are the same kind of damage with
+          opposite correct answers, which is the point of having both.
 
 Each variant is derived mechanically from the complete notebook, so what
 separates it from full marks is exactly the thing being tested and nothing else.
@@ -79,26 +87,25 @@ def make_unrun(steps):
     return notebook
 
 
-def make_broken(step):
+def make_broken(step, call, typo, owner):
+    """Misspell `call` in the cell that performs `step`, and record the crash."""
     notebook = load()
     cells = notebook["cells"]
-    indices = code_indices(cells, step_spans(notebook["cells"])[step])
-    # Break the call that actually performs the step, and give the cell the
-    # traceback Jupyter would have stored.
-    target = next(i for i in indices if "drop_duplicates" in source_of(cells[i]))
-    cells[target]["source"] = source_of(cells[target]).replace("drop_duplicates", "drop_duplictes")
+    indices = code_indices(cells, step_spans(cells)[step])
+    target = next(i for i in indices if call in source_of(cells[i]))
+    cells[target]["source"] = source_of(cells[target]).replace(call, typo)
     cells[target]["outputs"] = [{
         "output_type": "error",
         "ename": "AttributeError",
-        "evalue": "'DataFrame' object has no attribute 'drop_duplictes'",
+        "evalue": f"{owner} has no attribute '{typo}'",
         "traceback": [
             "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
             "\u001b[0;31mAttributeError\u001b[0m                            Traceback (most recent call last)",
-            "Cell \u001b[0;32mIn[76], line 1\u001b[0m",
-            "\u001b[0;31mAttributeError\u001b[0m: 'DataFrame' object has no attribute 'drop_duplictes'",
+            f"Cell \u001b[0;32mIn[{cells[target].get('execution_count')}], line 1\u001b[0m",
+            f"\u001b[0;31mAttributeError\u001b[0m: {owner} has no attribute '{typo}'",
         ],
     }]
-    print(f"  step {step}: cell {target + 1} now raises AttributeError")
+    print(f"  step {step}: cell {target + 1} raises AttributeError on {typo}")
     return notebook
 
 
@@ -132,8 +139,11 @@ def main():
     print(f"Deriving variants from {SOURCE.name} ({len(cells)} cells, steps {found[0]}-{found[-1]})")
 
     write("eda_02_unrun_steps_3_and_6.ipynb", make_unrun([3, 6]))
-    write("eda_03_error_step_3.ipynb", make_broken(3))
+    write("eda_03_error_step_6.ipynb",
+          make_broken(6, "sns.heatmap", "sns.heatmp", "module 'seaborn'"))
     write("eda_04_missing_steps_8_and_9.ipynb", make_missing([8, 9]))
+    write("eda_05_harmless_error_step_3.ipynb",
+          make_broken(3, "drop_duplicates", "drop_duplictes", "'DataFrame' object"))
     return 0
 
 

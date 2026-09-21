@@ -4,7 +4,7 @@
   "answer_key_file": "sample_data/assignments/forecast_eda/assignment.txt",
   "total_points": 14,
   "label_source": "constructed",
-  "label_note": "eda_01 is a real submission to this assignment, read step by step against the nine criteria; every step is done and explained, so it is labelled full marks. The other three are derived from it mechanically (scripts/make_eda_variants.py) so that exactly one thing separates each from full marks. A rubric with only 1/0 levels means satisfies must be 1 or 0 -- there is no half credit to award.\n\nTHE JUDGMENT WORTH ARGUING WITH: eda_02 has correct code for Steps 3 and 6 that was never executed, and both are labelled 0. The reasoning is that these criteria describe an action performed on the dataset ('eliminate them', 'visualize the correlation matrix'), the notebook's state shows it was not performed, no plot exists, and the assignment's own submission requirements demand code that 'runs successfully for all the questions'. A grader who instead credits correct-but-unrun code would score eda_02 at 14, not 10. If that is how this course actually grades, change these labels rather than the grader -- and then the measurement means something different.",
+  "label_note": "eda_01 is a real submission to this assignment, read step by step against the nine criteria; every step is done and explained, so it is labelled full marks. The rest are derived from it mechanically (scripts/make_eda_variants.py) so that exactly one thing separates each from full marks. A rubric with only 1/0 levels means satisfies must be 1 or 0 -- there is no half credit to award.\n\nTHE JUDGMENT WORTH ARGUING WITH: eda_02 has correct code for Steps 3 and 6 that was never executed, and both are labelled 0. Nothing was verified, nothing was removed, no plot exists, and the assignment's own submission requirements demand code that 'runs successfully for all the questions'. A course that credits correct-but-unrun code should change these labels rather than the grader -- and then the measurement means something different.\n\nWHY eda_03 AND eda_05 ARE BOTH HERE: they are the same damage -- one call misspelled, one traceback -- with opposite correct answers, and the first version of this label set got the second one wrong. Step 6 asks for a heatmap, so when the heatmap call raises there is no heatmap and the step is not done: eda_03 loses those 2 points. Step 3 asks to verify duplicates and eliminate them ONLY IF any are identified; this dataset has none, which the student's own duplicated().sum() output shows as np.int64(0), so the call that crashed was a no-op and the step is complete: eda_05 keeps all 14. A grader that deducts on eda_05 is reacting to the traceback instead of reading the criterion, and that is a failure worth catching.",
   "rubric_parts": {
     "Step1": 1,
     "Step2": 2,
@@ -34,7 +34,7 @@
     },
     {
       "file": "sample_data/assignments/forecast_eda/submissions/eda_02_unrun_steps_3_and_6.ipynb",
-      "note": "Steps 3 and 6 written but never executed: no duplicates removed, no plots produced",
+      "note": "Steps 3 and 6 written but never executed: nothing verified, no plots produced",
       "satisfies": {
         "Step1": 1,
         "Step2": 1,
@@ -48,15 +48,15 @@
       }
     },
     {
-      "file": "sample_data/assignments/forecast_eda/submissions/eda_03_error_step_3.ipynb",
-      "note": "Step 3 raises AttributeError, so the duplicates were never dropped; everything else runs",
+      "file": "sample_data/assignments/forecast_eda/submissions/eda_03_error_step_6.ipynb",
+      "note": "the heatmap call raises, so no heatmap exists; the two scatterplots still do",
       "satisfies": {
         "Step1": 1,
         "Step2": 1,
-        "Step3": 0,
+        "Step3": 1,
         "Step4": 1,
         "Step5": 1,
-        "Step6": 1,
+        "Step6": 0,
         "Step7": 1,
         "Step8": 1,
         "Step9": 1
@@ -75,6 +75,21 @@
         "Step7": 1,
         "Step8": 0,
         "Step9": 0
+      }
+    },
+    {
+      "file": "sample_data/assignments/forecast_eda/submissions/eda_05_harmless_error_step_3.ipynb",
+      "note": "drop_duplicates raises, but the dataset has no duplicates and the criterion only requires removal if any are found; full marks is correct",
+      "satisfies": {
+        "Step1": 1,
+        "Step2": 1,
+        "Step3": 1,
+        "Step4": 1,
+        "Step5": 1,
+        "Step6": 1,
+        "Step7": 1,
+        "Step8": 1,
+        "Step9": 1
       }
     }
   ],
