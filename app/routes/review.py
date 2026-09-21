@@ -29,7 +29,9 @@ def _attention_bucket(submission):
         return "low"
     # Two independent readings that landed on different numbers is the strongest
     # uncertainty signal available, and unlike the model's self-assessment it is
-    # measured rather than claimed.
+    # measured rather than claimed. The stored value is already filtered to
+    # spreads big enough to change the student's grade (see grading.py), so any
+    # disagreement that survives to here is worth a look.
     if (submission["ai_disagreement"] or 0) > 0:
         return "low"
     return submission["ai_confidence"] or "medium"

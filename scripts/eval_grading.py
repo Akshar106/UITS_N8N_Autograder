@@ -115,6 +115,7 @@ def grade_repeatedly(spec, text, student_id, repeats):
             "quoted": sum(1 for q in breakdown if q.get("evidence")),
             "unverified": sum(1 for q in breakdown if q.get("evidence_verified") is False),
             "disagreement": data.get("max_disagreement"),
+            "raw_disagreement": data.get("raw_disagreement"),
         }
     return scores, errors, quality
 
@@ -187,6 +188,11 @@ def summarise(rows):
         "low_confidence_rows": sum(1 for r in graded if r.get("confidence") == "low"),
         "rows_with_disagreement": sum(1 for r in graded if (r.get("disagreement") or 0) > 0),
         "worst_disagreement": max((r.get("disagreement") or 0) for r in graded),
+        # Every row where the passes differed at all, material or not. The gap
+        # between this and rows_with_disagreement is what the threshold is
+        # saving the faculty member from reading.
+        "rows_with_any_spread": sum(1 for r in graded if (r.get("raw_disagreement") or 0) > 0),
+        "worst_raw_disagreement": max((r.get("raw_disagreement") or 0) for r in graded),
     }
 
 
@@ -224,10 +230,13 @@ def print_report(spec, rows, probes, summary, repeats):
         print(f"  grounding: {summary['questions_quoted']}/{summary['questions_total']} questions "
               f"cited the student's words, {summary['quotes_unverified']} quote(s) not found in "
               f"the submission")
-        print(f"  triage: {summary['low_confidence_rows']} row(s) reported low confidence")
-        if repeats and summary.get("worst_disagreement"):
-            print(f"  adjudication: {summary['rows_with_disagreement']} row(s) where the "
-                  f"passes differed, worst {summary['worst_disagreement']} points")
+        print(f"  triage: {summary['low_confidence_rows']} of {summary['graded']} row(s) "
+              f"flagged for a human")
+        if summary.get("worst_raw_disagreement"):
+            print(f"  adjudication: passes differed on {summary['rows_with_any_spread']} row(s) "
+                  f"(worst {summary['worst_raw_disagreement']} points); "
+                  f"{summary['rows_with_disagreement']} of those cleared the materiality bar "
+                  f"(worst {summary['worst_disagreement']})")
 
     if probes:
         print("\nBIAS PROBES  (same content, different writing)")

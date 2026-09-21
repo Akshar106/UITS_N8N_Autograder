@@ -148,7 +148,10 @@
                           <span class="badge badge-{{ q.confidence }}">{{ q.confidence }}</span>
                         {% endif %}
                         {% if q.disagreement %}
-                          <span class="badge badge-low">passes differ by {{ q.disagreement }}</span>
+                          {# Red only when the gap is big enough to change the
+                             grade; a point of wobble on a twenty point question
+                             is worth seeing but not worth alarm. #}
+                          <span class="badge badge-{{ 'low' if q.disagreement_material else 'info' }}">passes differ by {{ q.disagreement }}</span>
                         {% endif %}
                         {% if q.basis in ('knowledge', 'both') %}
                           <span class="badge badge-info">{{ 'own knowledge' if q.basis == 'knowledge' else 'rubric + knowledge' }}</span>

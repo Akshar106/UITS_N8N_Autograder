@@ -226,6 +226,11 @@ in an "evidence" field:
 
 - Copy the words VERBATIM from the student's answer. Do not paraphrase, correct,
   or tidy them. To shorten a long passage, join fragments with " ... ".
+- The field must contain NOTHING BUT the student's words. Do not introduce the
+  quote, label it, or describe it. Write `"evidence": "from sklearn.metrics
+  import confusion_matrix"`, never `"evidence": "uses the right imports:
+  from sklearn.metrics import confusion_matrix"`. Anything you add is read as
+  part of the quote and makes it fail the check.
 - Quote the span that earns the points. If the answer earns nothing, quote the
   part that attempts the question, or use "" if the question was not attempted.
 - NEVER quote text that is not in the student's answer. If you cannot find
@@ -637,6 +642,24 @@ def _parse_llm_json(raw_text, student_text="", expected_criteria=None, expected_
 # submissions it scored thirty points away from.
 GRADING_PASSES = max(1, int(os.getenv("GRADING_PASSES", "2")))
 
+# Two passes disagree a little almost every time -- on a 100 point paper they
+# typically land within a point or two of each other on most questions. Treating
+# every such wobble as uncertainty flags the entire class, which costs a faculty
+# member exactly as much attention as flagging nobody. A disagreement earns a
+# human's time only when it is large enough to change what the student gets: a
+# tenth of the marks for that question, and two percent of the paper.
+DISAGREEMENT_OF_QUESTION = float(os.getenv("DISAGREEMENT_OF_QUESTION", "0.10"))
+DISAGREEMENT_OF_PAPER = float(os.getenv("DISAGREEMENT_OF_PAPER", "0.02"))
+
+
+def _disagreement_threshold(question_points, paper_points):
+    """The smallest spread between passes worth sending to a human."""
+    return max(
+        POINT_TOLERANCE,
+        DISAGREEMENT_OF_QUESTION * (question_points or 0),
+        DISAGREEMENT_OF_PAPER * (paper_points or 0),
+    )
+
 
 def _merge_passes(datas):
     """Combine independent grades of the same submission.
@@ -657,16 +680,22 @@ def _merge_passes(datas):
         logger.warning("Grading passes disagreed on structure: %s questions", sorted(sizes))
         for item in breakdown:
             item["confidence"] = "low"
-        merged.update(passes=len(datas), max_disagreement=None, structural_disagreement=True)
+        merged.update(passes=len(datas), max_disagreement=None,
+                      raw_disagreement=None, structural_disagreement=True)
         merged["confidence"] = "low"
         return merged
 
+    paper_points = sum(i["max_points"] for i in breakdown)
     worst = 0.0
+    worst_material = 0.0
     for index, item in enumerate(breakdown):
         awards = [d["per_question_breakdown"][index]["awarded_points"] for d in datas]
         spread = max(awards) - min(awards)
         mean = sum(awards) / len(awards)
         worst = max(worst, spread)
+        material = spread > _disagreement_threshold(item["max_points"], paper_points)
+        if material:
+            worst_material = max(worst_material, spread)
 
         # The commentary comes from whichever pass landed nearest the merged
         # award, so the explanation a faculty member reads matches the number
@@ -677,9 +706,14 @@ def _merge_passes(datas):
             item[field] = source.get(field)
 
         item["awarded_points"] = round(mean, 2)
+        # The raw spread is always recorded -- it is what the review page shows
+        # beside the question, and a small one is still worth seeing once you are
+        # already looking at the row. Only a material spread overrides the
+        # confidence, because that is what decides whether anyone looks at all.
         item["disagreement"] = round(spread, 2)
+        item["disagreement_material"] = material
         item["confidence"] = (
-            "low" if spread > POINT_TOLERANCE
+            "low" if material
             else min((d["per_question_breakdown"][index]["confidence"] for d in datas),
                      key=CONFIDENCE_LEVELS.index)
         )
@@ -694,8 +728,11 @@ def _merge_passes(datas):
         merged["confidence"] = "low"
     merged["knowledge_judgments"] = sum(
         1 for i in breakdown if i["basis"] in ("knowledge", "both"))
-    merged.update(passes=len(datas), max_disagreement=round(worst, 2),
-                  structural_disagreement=False)
+    # max_disagreement is what gets stored and drives triage, so it carries the
+    # worst spread that met the bar; raw_disagreement keeps the unfiltered number
+    # for the eval harness, which needs to see the wobble the bar is filtering.
+    merged.update(passes=len(datas), max_disagreement=round(worst_material, 2),
+                  raw_disagreement=round(worst, 2), structural_disagreement=False)
     return merged
 
 
@@ -725,7 +762,8 @@ def grade_submission(assignment_name, rubric_text, student_id, student_text,
         return results[-1]
     if len(usable) == 1:
         data = usable[0]["data"]
-        data.update(passes=1, max_disagreement=0.0, structural_disagreement=False)
+        data.update(passes=1, max_disagreement=0.0, raw_disagreement=0.0,
+                    structural_disagreement=False)
         return usable[0]
     return {"ok": True, "error": None, "raw": usable[0]["raw"],
             "data": _merge_passes([r["data"] for r in usable])}

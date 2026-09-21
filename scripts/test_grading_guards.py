@@ -142,6 +142,39 @@ def test_adjudication():
     check("the commentary comes from the pass nearest the merged award",
           q2["comment"] in ("harsh read", "generous read"))
 
+    # Two passes almost always wobble a little. Flagging every wobble puts the
+    # whole class in the review queue, which is the same as flagging nobody, so
+    # a spread has to be big on BOTH scales that matter: large for the question
+    # it is on (small questions are graded more consistently, so a point there
+    # means more) and large enough to move the final grade.
+    minor = grade([response([(10.0, 10.0), (6.0, 10.0)], extras=[{"confidence": "high"}] * 2),
+                   response([(10.0, 10.0), (6.5, 10.0)], extras=[{"confidence": "high"}] * 2)],
+                  passes=2)["data"]
+    check("a spread too small to matter is still shown on the question",
+          minor["per_question_breakdown"][1]["disagreement"] == 0.5)
+    check("a spread too small to matter is not called material",
+          minor["per_question_breakdown"][1]["disagreement_material"] is False)
+    check("a spread too small to matter leaves the confidence alone",
+          minor["confidence"] == "high")
+    check("a spread too small to matter does not reach the review queue",
+          minor["max_disagreement"] == 0.0)
+    check("the raw spread is still reported for diagnosis",
+          minor["raw_disagreement"] == 0.5)
+
+    # Big for its five point question, but 1.5 points on a hundred point paper
+    # does not change what the student gets.
+    def paper_of_100(second_award):
+        return response([(second_award, 5.0), (60.0, 95.0)],
+                        extras=[{"confidence": "high"}] * 2)
+
+    data = grade([paper_of_100(5.0), paper_of_100(3.5)], passes=2)["data"]
+    check("a spread that cannot move the final grade is not material",
+          data["max_disagreement"] == 0.0 and data["raw_disagreement"] == 1.5)
+
+    data = grade([paper_of_100(5.0), paper_of_100(2.0)], passes=2)["data"]
+    check("a spread big on both scales is material",
+          data["max_disagreement"] == 3.0 and data["confidence"] == "low")
+
     # A pass that fails validation must not drag the submission down with it.
     bad = response([(99.0, 10.0)])
     good = response([(10.0, 10.0), (6.0, 10.0)])
