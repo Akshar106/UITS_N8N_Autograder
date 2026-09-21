@@ -187,12 +187,31 @@ def test_adjudication():
     check("both passes failing is still an error", not result["ok"])
 
     # Passes that disagree on the NUMBER of questions cannot be compared
-    # position by position, so the whole row goes to a human.
+    # position by position. A rubric whose questions carry lettered sub-parts
+    # invites exactly this -- one reading grades the questions, another grades
+    # the sub-parts -- and keeping whichever arrived first is a coin toss over
+    # the whole grade, so a third reading breaks the tie.
     three = response([(10.0, 10.0), (5.0, 10.0), (5.0, 10.0)])
     two = response([(10.0, 10.0), (10.0, 10.0)])
-    data = grade([three, two], passes=2)["data"]
-    check("a structural disagreement is flagged", data["structural_disagreement"] is True)
-    check("a structural disagreement forces low confidence", data["confidence"] == "low")
+    two_harsher = response([(10.0, 10.0), (6.0, 10.0)])
+
+    data = grade([three, two, two_harsher], passes=2)["data"]
+    check("a split decision is broken by a third reading", data["structure_retried"] is True)
+    check("the tie-breaker sides with the majority structure",
+          len(data["per_question_breakdown"]) == 2)
+    check("the outvoted reading is dropped, not averaged in",
+          data["score_awarded"] == 18.0)
+    check("the surviving readings are still compared to each other",
+          data["structural_disagreement"] is False and data["raw_disagreement"] == 4.0)
+
+    # A tie-breaker that agrees with neither leaves the row to a human.
+    four = response([(10.0, 10.0)] * 4)
+    data = grade([three, two, four], passes=2)["data"]
+    check("an unbroken split is still flagged", data["structural_disagreement"] is True)
+    check("an unbroken split forces low confidence", data["confidence"] == "low")
+
+    check("passes that agree on structure take no extra reading",
+          grade([two, two_harsher], passes=2)["data"]["structure_retried"] is False)
 
     check("a single pass still works and reports one pass",
           grade([response(GOOD)], passes=1)["data"]["passes"] == 1)
@@ -656,6 +675,14 @@ def test_prompt_guards():
           "SAME score" in prompt and "padded" in prompt)
     check("the prompt demands one entry per rubric question",
           "EXACTLY ONE breakdown entry" in prompt)
+    check("the prompt says sub-parts are not separate questions",
+          "6 entries, never 20" in flat)
+    check("the prompt demands a quote behind a zero",
+          "LOW OR ZERO SCORE STILL NEEDS ITS" in flat)
+    check("the prompt allows an empty quote only for an unattempted question",
+          "ONLY when the student wrote nothing at all" in flat)
+    check("the prompt keeps commentary out of the quote",
+          "NOTHING BUT the student's words" in flat)
     check("the prompt says unanswered questions still get an entry",
           "not attempted" in prompt)
     check("the prompt says which rubric section is authoritative",

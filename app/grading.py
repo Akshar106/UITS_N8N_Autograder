@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import unicodedata
+from collections import Counter
 
 from app.llm_client import call_reallm
 
@@ -211,6 +212,10 @@ COVERAGE (MANDATORY)
 ────────────────────────────
 
 - Output EXACTLY ONE breakdown entry for EACH question in the rubric.
+- A question's lettered or bulleted sub-parts, such as "(a) 5 pts", are how its
+  marks are DIVIDED, not separate questions. Judge each sub-part, then report
+  the question as ONE entry whose max_points is the sub-parts added together.
+  A rubric with 6 questions split into 20 sub-parts gets 6 entries, never 20.
 - Keep them in the SAME ORDER as the rubric.
 - Never merge two rubric questions into one entry, and never invent an entry
   for a question the rubric does not contain.
@@ -231,8 +236,12 @@ in an "evidence" field:
   import confusion_matrix"`, never `"evidence": "uses the right imports:
   from sklearn.metrics import confusion_matrix"`. Anything you add is read as
   part of the quote and makes it fail the check.
-- Quote the span that earns the points. If the answer earns nothing, quote the
-  part that attempts the question, or use "" if the question was not attempted.
+- Quote the span that earns the points. A LOW OR ZERO SCORE STILL NEEDS ITS
+  QUOTE: show the wrong or inadequate words you are marking down. That is the
+  score a student is most likely to dispute, and "the answer was weak" with
+  nothing quoted is not something a faculty member can defend.
+- Leave "evidence" empty ONLY when the student wrote nothing at all for that
+  question. If they attempted it and got it wrong, quote the attempt.
 - NEVER quote text that is not in the student's answer. If you cannot find
   supporting words in the answer, you cannot award the points.
 - In a "missing" field, state what the rubric required that the answer does not
@@ -752,21 +761,60 @@ def grade_submission(assignment_name, rubric_text, student_id, student_text,
     confidence flag that routes the row to a human. See _merge_passes.
     """
     passes = GRADING_PASSES if passes is None else max(1, passes)
-    results = [
-        _grade_once(assignment_name, rubric_text, student_id, student_text,
-                    expected_criteria, expected_total, anchors)
-        for _ in range(passes)
-    ]
+
+    def read_once():
+        return _grade_once(assignment_name, rubric_text, student_id, student_text,
+                           expected_criteria, expected_total, anchors)
+
+    results = [read_once() for _ in range(passes)]
     usable = [r for r in results if r["ok"]]
     if not usable:
         return results[-1]
+    if len(usable) > 1:
+        usable, retried = _agree_on_structure(usable, read_once)
+    else:
+        retried = False
     if len(usable) == 1:
         data = usable[0]["data"]
         data.update(passes=1, max_disagreement=0.0, raw_disagreement=0.0,
-                    structural_disagreement=False)
+                    structural_disagreement=False, structure_retried=retried)
         return usable[0]
-    return {"ok": True, "error": None, "raw": usable[0]["raw"],
-            "data": _merge_passes([r["data"] for r in usable])}
+    merged = _merge_passes([r["data"] for r in usable])
+    merged["structure_retried"] = retried
+    return {"ok": True, "error": None, "raw": usable[0]["raw"], "data": merged}
+
+
+def _structure_of(result):
+    return len(result["data"]["per_question_breakdown"])
+
+
+def _agree_on_structure(usable, read_once):
+    """Resolve passes that split the rubric into different numbers of questions.
+
+    A rubric whose questions carry lettered sub-parts invites one reading to
+    grade the 6 questions and another to grade the 20 sub-parts. Neither is
+    malformed on its own, but they cannot be compared position by position, and
+    picking whichever came back first is a coin toss over the whole grade. One
+    extra reading breaks the tie by weight of evidence instead.
+    """
+    shapes = {_structure_of(r) for r in usable}
+    if len(shapes) == 1:
+        return usable, False
+
+    logger.warning("Grading passes split the rubric %s ways: %s; taking a tie-breaker",
+                   len(shapes), sorted(shapes))
+    extra = read_once()
+    if extra["ok"]:
+        usable = usable + [extra]
+
+    counts = Counter(_structure_of(r) for r in usable)
+    best, votes = counts.most_common(1)[0]
+    if votes < 2 or list(counts.values()).count(votes) > 1:
+        # Still no majority. Leave every reading in and let _merge_passes send
+        # the row to a human, which is the honest outcome when the tie-breaker
+        # did not break anything.
+        return usable, True
+    return [r for r in usable if _structure_of(r) == best], True
 
 
 def _grade_once(assignment_name, rubric_text, student_id, student_text,

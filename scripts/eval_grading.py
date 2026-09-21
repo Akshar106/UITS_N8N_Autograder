@@ -116,6 +116,8 @@ def grade_repeatedly(spec, text, student_id, repeats):
             "unverified": sum(1 for q in breakdown if q.get("evidence_verified") is False),
             "disagreement": data.get("max_disagreement"),
             "raw_disagreement": data.get("raw_disagreement"),
+            "structure_retried": bool(data.get("structure_retried")),
+            "structural_disagreement": bool(data.get("structural_disagreement")),
         }
     return scores, errors, quality
 
@@ -193,6 +195,11 @@ def summarise(rows):
         # saving the faculty member from reading.
         "rows_with_any_spread": sum(1 for r in graded if (r.get("raw_disagreement") or 0) > 0),
         "worst_raw_disagreement": max((r.get("raw_disagreement") or 0) for r in graded),
+        # The passes split the rubric into different numbers of questions and
+        # needed a tie-breaker. Rare, but it decides the whole grade when it
+        # happens, so it is worth seeing rather than buried in the log.
+        "structure_retried": sum(1 for r in graded if r.get("structure_retried")),
+        "structure_unresolved": sum(1 for r in graded if r.get("structural_disagreement")),
     }
 
 
@@ -237,6 +244,10 @@ def print_report(spec, rows, probes, summary, repeats):
                   f"(worst {summary['worst_raw_disagreement']} points); "
                   f"{summary['rows_with_disagreement']} of those cleared the materiality bar "
                   f"(worst {summary['worst_disagreement']})")
+        if summary.get("structure_retried"):
+            print(f"  structure: {summary['structure_retried']} row(s) where the passes split "
+                  f"the rubric differently and needed a tie-breaker, "
+                  f"{summary['structure_unresolved']} still unresolved")
 
     if probes:
         print("\nBIAS PROBES  (same content, different writing)")
