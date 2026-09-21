@@ -158,6 +158,29 @@ def test_canvas_rubric():
                     {"description": "B", "points": 3.0, "ratings": []}]}
     )
     check("total falls back to summing the criteria", summed["points_possible"] == 10.0)
+    # A Full Marks / No Marks criterion, which is how the EDA assignment's nine
+    # steps are scored. Half marks for "removed the duplicate rows" is not a
+    # grade a faculty member can defend, so the scale has to reach the prompt.
+    steps = canvas_rubric.from_assignment({"rubric": [
+        {"description": "Step 1", "long_description": "Open the file and read the dataset.",
+         "points": 1.0, "ratings": [{"description": "Full Marks", "points": 1.0},
+                                    {"description": "No Marks", "points": 0.0}]},
+        {"description": "Step 2", "points": 2.0,
+         "ratings": [{"description": "Proficient", "points": 2.0},
+                     {"description": "Developing", "points": 1.0},
+                     {"description": "No Marks", "points": 0.0}]},
+    ]})
+    check("a Full Marks / No Marks criterion is recognised as all-or-nothing",
+          steps["criteria"][0]["binary"] is True)
+    check("a three-level criterion is left as a scale",
+          steps["criteria"][1]["binary"] is False)
+    check("the all-or-nothing rule reaches the prompt",
+          "ALL OR NOTHING: award exactly 1 or exactly 0" in steps["text"])
+    check("a graded scale gets no all-or-nothing rule",
+          steps["text"].count("ALL OR NOTHING") == 1)
+    check("the hidden longer description is what carries the actual requirement",
+          "Open the file and read the dataset." in steps["text"])
+
     check("no rubric attached -> None", canvas_rubric.from_assignment({"name": "x"}) is None)
     check("empty rubric list -> None", canvas_rubric.from_assignment({"rubric": []}) is None)
     check("malformed rubric -> None", canvas_rubric.from_assignment({"rubric": "nope"}) is None)

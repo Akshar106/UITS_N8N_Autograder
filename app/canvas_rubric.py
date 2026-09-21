@@ -18,6 +18,21 @@ def _clean(value):
     return (value or "").strip()
 
 
+def _is_binary(ratings):
+    """True for a Full Marks / No Marks criterion.
+
+    A faculty member who builds a criterion with exactly two levels, all or
+    nothing, has said something definite: the step was done or it was not. Half
+    marks for "removed the duplicate rows" is not a grade they can defend, and
+    it is not a grade this tool should invent -- so these are the criteria whose
+    awards get snapped back onto the scale. Rubrics with three or more levels are
+    left alone: a score between "Proficient" and "Developing" is a real judgment,
+    and Canvas accepts it.
+    """
+    points = [r["points"] for r in ratings if isinstance(r["points"], (int, float))]
+    return len(ratings) == 2 and len(points) == 2 and min(points) == 0 and max(points) > 0
+
+
 def from_assignment(assignment):
     """Return a dict describing the assignment's Canvas rubric, or None.
 
@@ -46,6 +61,7 @@ def from_assignment(assignment):
             "long_description": _clean(criterion.get("long_description")),
             "points": criterion.get("points"),
             "ratings": ratings,
+            "binary": _is_binary(ratings),
         })
 
     if not criteria:
@@ -83,6 +99,11 @@ def render(criteria, points_possible=None):
             rating_points = _num(rating["points"]) if rating["points"] is not None else "?"
             detail = f" - {rating['long_description']}" if rating["long_description"] else ""
             lines.append(f"    {rating_points} points: {label}{detail}")
+        if criterion.get("binary"):
+            full = max(r["points"] for r in criterion["ratings"]
+                       if isinstance(r["points"], (int, float)))
+            lines.append(f"    ALL OR NOTHING: award exactly {_num(full)} or exactly 0 "
+                         f"for this criterion. No partial credit.")
         lines.append("")
 
     return "\n".join(lines).strip()

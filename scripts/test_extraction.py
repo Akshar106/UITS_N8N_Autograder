@@ -12,6 +12,7 @@ justification. Nothing anywhere said extraction had failed. Every check here
 exists to make sure that class of silent wrong grade cannot happen again.
 """
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -305,11 +306,101 @@ def test_txt_encodings():
 
 # --- refusals and text entry ---------------------------------------------------
 
+def notebook(cells, **top):
+    payload = {"nbformat": 4, "cells": cells}
+    payload.update(top)
+    return json.dumps(payload).encode()
+
+
+def code_cell(source, count=1, outputs=()):
+    return {"cell_type": "code", "execution_count": count,
+            "source": source, "outputs": list(outputs)}
+
+
+def test_notebook():
+    print("\n-- .ipynb: cells, outputs, and whether the code was ever run --")
+
+    result = read("hw.ipynb", notebook([
+        {"cell_type": "markdown", "source": ["# Step 1\n", "Read the data."]},
+        code_cell(["import pandas as pd\n", "df = pd.read_csv('f.csv')\n", "df.shape"],
+                  count=1,
+                  outputs=[{"output_type": "execute_result",
+                            "data": {"text/plain": ["(7752, 25)"]}}]),
+    ]))
+    check("markdown cells are read", "Read the data." in result.text)
+    check("code is kept verbatim so it can be quoted as evidence",
+          "df = pd.read_csv('f.csv')" in result.text)
+    check("the output of a cell is included", "(7752, 25)" in result.text)
+    check("an executed cell says so", "ran as In[1]" in result.text)
+    check("cells keep notebook order",
+          result.text.index("# Step 1") < result.text.index("import pandas"))
+
+    # The distinction the whole reader exists for: written but never run.
+    result = read("hw.ipynb", notebook([
+        code_cell(["df.drop_duplicates(inplace=True)"], count=None, outputs=[]),
+    ]))
+    check("a cell that was never run is labelled", "NEVER RUN" in result.text)
+    check("a cell that was never run is reported to faculty",
+          any("never" in note for note in result.notes))
+    check("the code of an unrun cell is still read",
+          "df.drop_duplicates(inplace=True)" in result.text)
+
+    result = read("hw.ipynb", notebook([
+        code_cell(["df.drop_duplictes()"], count=4, outputs=[{
+            "output_type": "error", "ename": "AttributeError", "evalue": "nope",
+            "traceback": ["\u001b[0;31mAttributeError\u001b[0m: no attribute 'drop_duplictes'"]}]),
+    ]))
+    check("a cell that raised is labelled", "--- ERROR ---" in result.text)
+    check("the traceback is readable", "no attribute 'drop_duplictes'" in result.text)
+    check("terminal colour codes are stripped", "\u001b[" not in result.text)
+    check("an error is reported to faculty",
+          any("error" in note for note in result.notes))
+
+    # A plot is the deliverable for several steps. We cannot see it, but the
+    # fact that one was produced is real evidence and must not be silently lost.
+    result = read("hw.ipynb", notebook([
+        code_cell(["sns.heatmap(df.corr())"], count=2, outputs=[{
+            "output_type": "display_data",
+            "data": {"image/png": "iVBORw0KGgo=", "text/plain": ["<Axes: >"]}}]),
+    ]))
+    check("a figure in the output is recorded", "a figure was produced" in result.text)
+    check("the unreadable figure is disclosed to faculty",
+          any("could not be read" in note for note in result.notes))
+    check("a notebook with figures is not treated as a failed read",
+          not result.looks_incomplete)
+
+    # One cell can print seven thousand rows; the next question still has to fit.
+    huge = read("hw.ipynb", notebook([
+        code_cell(["df"], count=1, outputs=[{"output_type": "stream", "name": "stdout",
+                                             "text": ["row %d\n" % i for i in range(500)]}]),
+    ]))
+    check("a runaway output is truncated", "[output truncated]" in huge.text)
+    check("truncation keeps the beginning of the output", "row 0" in huge.text)
+    check("truncation is bounded", len(huge.text) < 4000)
+
+    check("a notebook with no code cells is reported, not refused",
+          any("no code cells" in note for note in
+              read("hw.ipynb", notebook([{"cell_type": "markdown",
+                                          "source": ["just prose"]}])).notes))
+
+    for payload, expected in ((b"not json at all", "not valid notebook JSON"),
+                              (notebook([]), "no cells")):
+        try:
+            read("hw.ipynb", payload)
+            check(f"a broken notebook is refused ({expected})", False)
+        except extract.ExtractionError as exc:
+            check(f"a broken notebook is refused ({expected})", expected in str(exc))
+
+    check("a plain .py script is read as text",
+          "import pandas" in read("hw.py", b"import pandas as pd\n").text)
+
+
 def test_refusals():
     print("\n-- unsupported formats are refused by name --")
 
     for ext, expected in (("doc", "Save As"), ("png", "Images cannot be read"),
-                          ("zip", "Archives cannot be read"), ("pages", "Export To")):
+                          ("zip", "Archives cannot be read"), ("pages", "Export To"),
+                          ("html", "submit the .ipynb file itself")):
         try:
             read(f"x.{ext}", b"content")
             check(f".{ext} is refused", False)
@@ -320,7 +411,8 @@ def test_refusals():
         read("x.xyz", b"content")
         check("an unknown extension names the accepted formats", False)
     except extract.ExtractionError as exc:
-        check("an unknown extension names the accepted formats", ".pdf, .docx and .txt" in str(exc))
+        check("an unknown extension names the accepted formats",
+              ".pdf, .docx, .txt, .ipynb and .py" in str(exc))
 
     try:
         read("noextension", b"content")
@@ -388,6 +480,7 @@ def main():
     test_docx_header_fallback()
     test_pdf()
     test_txt_encodings()
+    test_notebook()
     test_refusals()
     test_text_entry()
     test_rubric_files_still_read()

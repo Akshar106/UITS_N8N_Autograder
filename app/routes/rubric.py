@@ -74,9 +74,11 @@ def upload_rubric(course_id, assignment_id):
         # The criteria are stored, not just rendered into the prompt: grading
         # checks the model's breakdown against them, which is what catches a
         # silently skipped question.
-        criteria_json = json.dumps(
-            [{"description": c["description"], "points": c["points"]} for c in canvas_part["criteria"]]
-        ) if canvas_part else None
+        criteria_json = json.dumps([
+            {"description": c["description"], "points": c["points"],
+             "binary": bool(c.get("binary"))}
+            for c in canvas_part["criteria"]
+        ]) if canvas_part else None
 
         rubric_changed = storage.save_rubric(
             user_id, course_id, assignment_id, assignment["name"], rubric_text,

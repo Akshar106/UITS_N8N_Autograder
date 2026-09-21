@@ -124,6 +124,34 @@ When an answer contains code, judge whether the code WORKS, by reading it:
   say which, and grade each criterion on its own evidence.
 
 ────────────────────────────
+JUPYTER NOTEBOOKS
+────────────────────────────
+
+A submission may arrive as a notebook transcript. The `--- cell N ... ---` lines
+are labels this tool added, NOT the student's work: never quote them as evidence,
+and never mark a student down for them.
+
+- `ran as In[3]` means the cell was executed and what follows `--- output ---`
+  is what it actually produced. Output is the strongest evidence a step was done:
+  code that claims to drop duplicates, followed by a row count that fell, is the
+  step completed.
+- `NEVER RUN -- no output` means the student wrote the code but never executed
+  it. Judge the code on its merits, and say in the comment that it was not run.
+  Do not credit a RESULT that was never produced.
+- `--- ERROR ---` means the cell raised. Code that crashes did not do the step,
+  however close it looks. Read the traceback: if the error is unrelated to the
+  criterion being graded, do not punish the criterion for it.
+- Cells run out of order (In[7] above In[2]) are normal in notebooks and are not
+  a fault by themselves.
+- A figure noted as unreadable IS evidence that a plot was produced. Credit the
+  plotting code and the fact that a figure appeared; do not claim to have seen
+  what the plot shows, and do not withhold marks because you could not see it.
+  If the criterion depends on what the plot LOOKS like, say so in the comment and
+  give your confidence as "low".
+- The same step may be spread over several cells, or several steps done in one.
+  Grade the criterion against the whole notebook, not against one cell.
+
+────────────────────────────
 OPEN-ENDED AND ANALYTICAL ANSWERS
 ────────────────────────────
 
@@ -481,7 +509,7 @@ def _annotate_evidence_and_confidence(data, student_text):
     )
 
 
-def _recompute_totals(data):
+def _recompute_totals(data, blame_model=True):
     """Derive the score from the breakdown instead of trusting the model's sum.
 
     The prompt asks for score_awarded = sum(awarded_points), but nothing made
@@ -496,7 +524,7 @@ def _recompute_totals(data):
 
     for field, computed in (("score_awarded", computed_awarded), ("total_points", computed_total)):
         stated = data[field]
-        if abs(stated - computed) > POINT_TOLERANCE:
+        if blame_model and abs(stated - computed) > POINT_TOLERANCE:
             logger.warning(
                 "Model reported %s=%s but its breakdown sums to %s; using the breakdown.",
                 field, stated, computed,
@@ -778,10 +806,47 @@ def grade_submission(assignment_name, rubric_text, student_id, student_text,
         data = usable[0]["data"]
         data.update(passes=1, max_disagreement=0.0, raw_disagreement=0.0,
                     structural_disagreement=False, structure_retried=retried)
+        _snap_to_scale(data, expected_criteria)
         return usable[0]
     merged = _merge_passes([r["data"] for r in usable])
     merged["structure_retried"] = retried
+    _snap_to_scale(merged, expected_criteria)
     return {"ok": True, "error": None, "raw": usable[0]["raw"], "data": merged}
+
+
+def _snap_to_scale(data, expected_criteria):
+    """Put awards back on an all-or-nothing scale the faculty member declared.
+
+    Adjudication makes this necessary rather than merely tidy: two passes that
+    split on a Full Marks / No Marks criterion average to half marks, which is
+    the one answer the rubric says is impossible. A tie goes to the lower value
+    -- the row is flagged for review either way, and handing back an inflated
+    grade nobody checked is the worse of the two failures.
+    """
+    if not expected_criteria:
+        return
+    breakdown = data["per_question_breakdown"]
+    if len(breakdown) != len(expected_criteria):
+        return
+
+    snapped = 0
+    for item, criterion in zip(breakdown, expected_criteria):
+        if not criterion.get("binary"):
+            continue
+        full = item["max_points"]
+        awarded = item["awarded_points"]
+        if awarded in (0, full):
+            continue
+        item["awarded_points"] = full if awarded > full / 2 else 0.0
+        item["snapped_from"] = awarded
+        snapped += 1
+
+    if snapped:
+        # The totals move because this function moved the awards, so the
+        # arithmetic warning would be blaming the model for our own edit.
+        _recompute_totals(data, blame_model=False)
+        data["snapped_awards"] = snapped
+        logger.info("Snapped %d award(s) onto an all-or-nothing rubric scale", snapped)
 
 
 def _structure_of(result):

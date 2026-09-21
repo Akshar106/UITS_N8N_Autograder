@@ -7,10 +7,11 @@ no sign anything had gone wrong. A silent partial extraction is worse than a
 loud failure, so every reader reports what it saw as well as what it read, and
 the caller can refuse to grade a file that looks like it lost content.
 
-Supported: .pdf, .docx, .txt. Everything else is refused by name.
+Supported: .pdf, .docx, .txt, .ipynb, .py. Everything else is refused by name.
 """
 import html
 import io
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -39,7 +40,7 @@ _DOCX_SHORT_BODY = 200
 _HEADER_FALLBACK_THRESHOLD = 120
 _PAGE_NUMBER_RE = re.compile(r"^(page\s*)?\d+(\s*(of|/)\s*\d+)?$", re.IGNORECASE)
 
-SUPPORTED_EXTENSIONS = ("pdf", "docx", "txt")
+SUPPORTED_EXTENSIONS = ("pdf", "docx", "txt", "ipynb", "py")
 
 # Formats students submit by accident. Naming the fix is worth more than
 # "Unsupported file type": the student can act on it, a stack trace they cannot.
@@ -50,8 +51,12 @@ _KNOWN_UNSUPPORTED = {
              "to produce a .docx, then resubmit.",
     "odt": "OpenDocument files cannot be read. Save as .docx or .pdf and resubmit.",
     "rtf": "Rich Text files cannot be read. Save as .docx or .pdf and resubmit.",
-    "zip": "Archives cannot be read. Please upload the .pdf, .docx or .txt files "
-           "themselves rather than a zip of them.",
+    "zip": "Archives cannot be read. Please upload the notebook or document "
+           "itself rather than a zip of it.",
+    "html": "This looks like a notebook exported to HTML. Please submit the .ipynb "
+            "file itself, so the grader can read each cell and its output.",
+    "r": "R scripts cannot be read. This assignment expects a Python notebook "
+         "(.ipynb) or script (.py).",
     "png": "Images cannot be read; the grader works from text. Please submit your "
            "written answers as a .pdf, .docx or .txt.",
     "jpg": "Images cannot be read; the grader works from text. Please submit your "
@@ -105,12 +110,13 @@ def extract_document(filename, content_bytes):
     if ext not in SUPPORTED_EXTENSIONS:
         raise ExtractionError(
             f"Unsupported file type: .{ext or 'unknown'}. Accepted formats are "
-            f".pdf, .docx and .txt."
+            f".pdf, .docx, .txt, .ipynb and .py."
         )
     if not content_bytes:
         raise ExtractionError("The file is empty.")
 
-    reader = {"pdf": _read_pdf, "docx": _read_docx, "txt": _read_txt}[ext]
+    reader = {"pdf": _read_pdf, "docx": _read_docx, "txt": _read_txt,
+              "ipynb": _read_ipynb, "py": _read_txt}[ext]
     result = reader(content_bytes)
     result.text = _tidy(result.text)
     result.stats["chars"] = result.chars
@@ -384,6 +390,162 @@ def _read_pdf(content_bytes):
             f"{tables} table{'s' if tables != 1 else ''} detected; text inside tables "
             f"may not read in the intended order."
         )
+    return result
+
+
+# --- .ipynb -------------------------------------------------------------------
+
+# A single cell can print a 7,000-row dataframe. The grader needs to see that the
+# cell ran and what it produced, not the whole frame, and a rubric prompt drowned
+# in output is a rubric prompt that misses the next question.
+_OUTPUT_LINES = 30
+_OUTPUT_CHARS = 2000
+# Tracebacks arrive wrapped in terminal colour codes, which are noise to a reader
+# that is not a terminal.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _joined(source):
+    """nbformat stores source and text either as a string or a list of lines."""
+    if isinstance(source, list):
+        return "".join(str(part) for part in source)
+    return str(source or "")
+
+
+def _clip(text):
+    text = _ANSI_RE.sub("", text).strip("\n")
+    if not text:
+        return ""
+    lines = text.split("\n")
+    clipped = False
+    if len(lines) > _OUTPUT_LINES:
+        lines, clipped = lines[:_OUTPUT_LINES], True
+    text = "\n".join(lines)
+    if len(text) > _OUTPUT_CHARS:
+        text, clipped = text[:_OUTPUT_CHARS], True
+    if clipped:
+        text += "\n[output truncated]"
+    return text
+
+
+def _render_outputs(outputs, stats):
+    """Turn a cell's outputs into text, recording what could not be rendered."""
+    blocks = []
+    for output in outputs:
+        if not isinstance(output, dict):
+            continue
+        kind = output.get("output_type")
+
+        if kind == "error":
+            stats["errors"] = stats.get("errors", 0) + 1
+            trace = "\n".join(_joined(line) for line in (output.get("traceback") or []))
+            detail = _clip(trace) or f"{output.get('ename')}: {output.get('evalue')}"
+            blocks.append(("ERROR", detail))
+            continue
+
+        if kind == "stream":
+            blocks.append(("output", _clip(_joined(output.get("text")))))
+            continue
+
+        data = output.get("data") or {}
+        # A plot is the point of several of these steps, and it comes back as a
+        # PNG. We cannot read it -- but we can say it exists, which lets the
+        # grader credit "the code plots a heatmap and a heatmap came out" without
+        # anyone pretending to have looked at the picture.
+        images = [mime for mime in data if mime.startswith("image/")]
+        if images:
+            stats["images"] = stats.get("images", 0) + len(images)
+            blocks.append((f"output: {images[0]} (a figure was produced; "
+                           f"the grader cannot see images)", ""))
+        if "text/plain" in data:
+            blocks.append(("output", _clip(_joined(data["text/plain"]))))
+        elif not images and data:
+            blocks.append((f"output: {sorted(data)[0]}", ""))
+
+    return blocks
+
+
+def _read_ipynb(content_bytes):
+    """Read a Jupyter notebook as an ordered transcript of cells and outputs.
+
+    Code alone does not answer "did the student do this step". A cell that was
+    never run, or that ended in a traceback, looks identical to a working one if
+    you only read the source -- so the transcript carries the execution count,
+    the output, and the error, and the grader is told which is which.
+    """
+    text = _read_txt(content_bytes).text
+    try:
+        notebook = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ExtractionError(
+            "This .ipynb file is not valid notebook JSON and could not be opened. "
+            "Re-save it from Jupyter and resubmit."
+        ) from exc
+
+    if not isinstance(notebook, dict):
+        raise ExtractionError("This .ipynb file does not contain a notebook.")
+
+    cells = notebook.get("cells")
+    if cells is None and notebook.get("worksheets"):
+        # nbformat 3, still occasionally exported by old tooling.
+        cells = [c for sheet in notebook["worksheets"] for c in (sheet.get("cells") or [])]
+    if not isinstance(cells, list) or not cells:
+        raise ExtractionError("This notebook contains no cells.")
+
+    result = Extracted()
+    stats = result.stats
+    stats.update(cells=len(cells), code_cells=0, unexecuted=0, errors=0, images=0)
+    parts = []
+
+    for index, cell in enumerate(cells, start=1):
+        if not isinstance(cell, dict):
+            continue
+        kind = cell.get("cell_type", "code")
+        source = _joined(cell.get("source")).rstrip()
+
+        if kind != "code":
+            if source:
+                parts.append(f"--- cell {index} ({kind}) ---\n{source}")
+            continue
+
+        stats["code_cells"] += 1
+        count = cell.get("execution_count")
+        outputs = [o for o in (cell.get("outputs") or []) if isinstance(o, dict)]
+        if count is None and not outputs:
+            stats["unexecuted"] += 1
+            header = f"--- cell {index} (code, NEVER RUN -- no output) ---"
+        else:
+            ran_as = f"In[{count}]" if count is not None else "In[?]"
+            header = f"--- cell {index} (code, ran as {ran_as}) ---"
+
+        block = [header, source] if source else [header, "(empty cell)"]
+        for label, body in _render_outputs(outputs, stats):
+            block.append(f"--- {label} ---")
+            if body:
+                block.append(body)
+        parts.append("\n".join(block))
+
+    result.text = "\n\n".join(parts)
+
+    if stats["unexecuted"]:
+        result.notes.append(
+            f"{stats['unexecuted']} of {stats['code_cells']} code cells were never "
+            f"run, so there is no output to show they work."
+        )
+    if stats["errors"]:
+        result.notes.append(
+            f"{stats['errors']} cell(s) ended in an error when the student ran them."
+        )
+    if stats["images"]:
+        result.notes.append(
+            f"{stats['images']} figure(s) in the output could not be read. Plots were "
+            f"judged from the code that drew them and the fact that a figure appeared."
+        )
+    # A notebook of nothing but prose is a student who pasted their write-up into
+    # markdown cells and never wrote code. That is a grade of its own, not a
+    # reading failure, so it is reported rather than refused.
+    if not stats["code_cells"]:
+        result.notes.append("This notebook contains no code cells.")
     return result
 
 

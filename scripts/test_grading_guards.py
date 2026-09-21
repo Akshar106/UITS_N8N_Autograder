@@ -217,6 +217,46 @@ def test_adjudication():
           grade([response(GOOD)], passes=1)["data"]["passes"] == 1)
 
 
+def test_all_or_nothing_rubric():
+    print("\n-- an all-or-nothing Canvas rubric admits no midpoints --")
+
+    binary = [{"description": "Step 1", "points": 2.0, "binary": True},
+              {"description": "Step 2", "points": 2.0, "binary": True}]
+
+    # Two passes splitting on a Full Marks / No Marks step average to half
+    # marks, which is the one answer that rubric says cannot happen.
+    split = grade([response([(2.0, 2.0), (2.0, 2.0)]),
+                   response([(2.0, 2.0), (0.0, 2.0)])],
+                  passes=2, expected_criteria=binary, expected_total=4.0)["data"]
+    awards = [q["awarded_points"] for q in split["per_question_breakdown"]]
+    check("a split on an all-or-nothing step does not become half marks",
+          awards == [2.0, 0.0])
+    check("a tie goes to the lower value rather than inflating the grade",
+          split["score_awarded"] == 2.0)
+    check("the snap is recorded so a human can see it happened",
+          split["snapped_awards"] == 1
+          and split["per_question_breakdown"][1]["snapped_from"] == 1.0)
+    check("the disagreement is still reported after snapping",
+          split["raw_disagreement"] == 2.0 and split["confidence"] == "low")
+
+    # A single pass that ignores the scale is corrected the same way.
+    single = grade([response([(1.5, 2.0), (0.4, 2.0)])],
+                   passes=1, expected_criteria=binary, expected_total=4.0)["data"]
+    check("partial credit on an all-or-nothing step is snapped to the scale",
+          [q["awarded_points"] for q in single["per_question_breakdown"]] == [2.0, 0.0])
+    check("the total is recomputed from the snapped awards",
+          single["score_awarded"] == 2.0)
+
+    # A graded scale is a real judgment and must be left alone.
+    scaled = [{"description": "Q1", "points": 2.0, "binary": False},
+              {"description": "Q2", "points": 2.0, "binary": False}]
+    data = grade([response([(1.5, 2.0), (0.5, 2.0)])],
+                 passes=1, expected_criteria=scaled, expected_total=4.0)["data"]
+    check("partial credit on a graded scale is untouched",
+          [q["awarded_points"] for q in data["per_question_breakdown"]] == [1.5, 0.5])
+    check("an untouched grade records no snap", "snapped_awards" not in data)
+
+
 STUDENT_ANSWER = (
     "Q1: A binary search tree keeps all values in the left subtree smaller than "
     "the node. Average-case search is O(log n) when the tree is balanced.\n\n"
@@ -675,6 +715,14 @@ def test_prompt_guards():
           "SAME score" in prompt and "padded" in prompt)
     check("the prompt demands one entry per rubric question",
           "EXACTLY ONE breakdown entry" in prompt)
+    check("the prompt says the cell labels are not the student's work",
+          "labels this tool added" in flat)
+    check("the prompt distinguishes code that ran from code that did not",
+          "NEVER RUN" in prompt and "not credit a RESULT that was never produced" in flat)
+    check("the prompt treats a crashed cell as the step not done",
+          "Code that crashes did not do the step" in flat)
+    check("the prompt credits a plot it cannot see without pretending to see it",
+          "do not claim to have seen" in flat and "do not withhold marks" in flat)
     check("the prompt says sub-parts are not separate questions",
           "6 entries, never 20" in flat)
     check("the prompt demands a quote behind a zero",
@@ -735,6 +783,7 @@ def main():
     test_impossible_scores()
     test_ceiling()
     test_adjudication()
+    test_all_or_nothing_rubric()
     test_rubric_coverage()
     test_retries()
     test_evidence_verification()
