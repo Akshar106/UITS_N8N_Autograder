@@ -330,6 +330,14 @@ _WHITESPACE_RE = re.compile(r"\s+")
 # The prompt asks for " ... " between fragments of a shortened quote; accept the
 # unicode ellipsis and bare dots too, since models produce all three.
 _ELLIPSIS_RE = re.compile(r"\s*(?:\.\.\.+|…)\s*")
+# A quote from code is inherently several lines, and the lines a model picks are
+# usually not adjacent in the source -- it skips the imports and the blank lines
+# between them. Each line is therefore treated as its own fragment.
+_LINE_BREAK_RE = re.compile(r"[\r\n]+")
+# Models sometimes emit a literal backslash-n inside the JSON string rather than
+# a real newline. Left alone, the backslash is stripped as punctuation and the
+# "n" fuses onto the next word ("1e-6\nout[...]" -> "1e 6 nout").
+_ESCAPED_WHITESPACE_RE = re.compile(r"\\[nrt]")
 # Everything that is not a letter, digit or space. Punctuation is dropped from
 # both sides before comparing: a model quoting "node's" as "node's", or leaving
 # out a pair of parentheses, is still quoting the student. Requiring the
@@ -387,14 +395,16 @@ def _quote_is_in(quote, student_text):
     if not haystacks:
         return False, _normalise(quote) or None
 
-    # Split on the ellipsis first: normalising would strip the dots and fuse the
-    # fragments into one string that appears nowhere.
-    for fragment in _ELLIPSIS_RE.split(quote or ""):
-        fragment = _normalise(fragment)
-        if not fragment:
-            continue
-        if not any(fragment in haystack for haystack in haystacks):
-            return False, fragment
+    # Split before normalising: normalising strips the dots and the newlines, so
+    # the fragments would fuse into one string that appears nowhere.
+    text = _ESCAPED_WHITESPACE_RE.sub("\n", quote or "")
+    for chunk in _ELLIPSIS_RE.split(text):
+        for fragment in _LINE_BREAK_RE.split(chunk):
+            fragment = _normalise(fragment)
+            if not fragment:
+                continue
+            if not any(fragment in haystack for haystack in haystacks):
+                return False, fragment
     return True, None
 
 
@@ -602,8 +612,12 @@ def _parse_llm_json(raw_text, student_text="", expected_criteria=None, expected_
     if missing:
         raise ValueError(f"LLM response missing fields: {missing}")
     _coerce_numeric_fields(data)
-    _validate_breakdown(data, expected_criteria, expected_total)
+    # Recompute BEFORE validating. The whole point of recomputing is that the
+    # model's stated totals are not trusted, so checking them against the rubric
+    # checks the wrong number: a response claiming 100 while its breakdown summed
+    # to 114 passed a 100-point check and then had its total replaced by 114.
     _recompute_totals(data)
+    _validate_breakdown(data, expected_criteria, expected_total)
     _annotate_evidence_and_confidence(data, student_text)
     return data
 

@@ -158,6 +158,42 @@ def test_evidence_verification():
     check("a half-real, half-invented quote is still flagged",
           half["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
 
+    # Code quotes are inherently several lines, and the lines a model picks are
+    # rarely adjacent in the source -- it skips imports and blank lines. Eight of
+    # these were wrongly flagged in one real run.
+    CODE = ("import pandas as pd\n"
+            "from sklearn.pipeline import Pipeline\n\n"
+            "df = pd.read_csv('churn.csv')\n"
+            "prep = ColumnTransformer([('num', StandardScaler(), num)])\n"
+            "X_train, X_test = train_test_split(X, y, stratify=y)\n")
+    multiline = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "prep = ColumnTransformer([('num', StandardScaler(), num)])\n"
+                        "X_train, X_test = train_test_split(X, y, stratify=y)"}])],
+        student_text=CODE,
+    )
+    check("non-adjacent code lines quoted together still verify",
+          multiline["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    # Some models write a literal backslash-n inside the JSON string instead of a
+    # real newline; the backslash is stripped as punctuation and the "n" fuses
+    # onto the next word.
+    escaped = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "df = pd.read_csv('churn.csv')\\nprep = ColumnTransformer("}])],
+        student_text=CODE,
+    )
+    check("a literal backslash-n between lines still verifies",
+          escaped["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    invented_line = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "df = pd.read_csv('churn.csv')\nmodel.explain_shap_values()"}])],
+        student_text=CODE,
+    )
+    check("an invented line among real ones is still flagged",
+          invented_line["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
+
     messy = grade(
         [response([(10.0, 10.0)], extras=[{
             "evidence": "AVERAGE-CASE   search\nis O(log n)"}])],
@@ -339,6 +375,21 @@ def test_rubric_coverage():
     check("a total that disagrees with the rubric is rejected", not result["ok"])
     check("the error names both totals",
           "rubric totals 100.0" in result["error"] and "graded out of 50.0" in result["error"])
+
+    # The total check must run on the RECOMPUTED total, not the one the model
+    # stated. A real run produced a response claiming total_points 100 whose
+    # breakdown summed to 114; it passed the 100-point check and then had its
+    # total replaced by 114, and the submission scored 108 out of a 100-point
+    # paper.
+    inflated = [(18.0, 19.0)] * 6
+    result = grade([response(inflated, stated_total=100.0)] * 3, expected_total=100.0)
+    check("a breakdown that oversums the rubric total is rejected", not result["ok"])
+    check("the error names the real total, not the claimed one",
+          "graded out of 114.0" in result["error"])
+
+    undersized = [(4.0, 5.0)] * 6
+    result = grade([response(undersized, stated_total=100.0)] * 3, expected_total=100.0)
+    check("a breakdown that undersums the rubric total is rejected too", not result["ok"])
 
     # Without a Canvas rubric there is nothing to check against, and grading
     # must still work from an uploaded file alone.
