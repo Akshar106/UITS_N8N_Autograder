@@ -17,9 +17,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import extract  # noqa: E402
-from scripts.eval_grading import resolve_expected_totals  # noqa: E402
+from scripts.eval_grading import build_rubric, resolve_expected_totals  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _key(name):
+    """Match a label's part name to a criterion's: 'Step1' is 'Step 1'."""
+    return "".join((name or "").split()).lower()
 
 
 def check_one(path):
@@ -29,11 +34,31 @@ def check_one(path):
 
     resolve_expected_totals(spec)  # raises SystemExit with a specific message
 
-    rubric = extract.extract_document(Path(spec["rubric_file"]).name,
-                                      (ROOT / spec["rubric_file"]).read_bytes())
-    print(f"rubric reads: {rubric.chars} chars, {len(spec.get('rubric_parts', {}))} sub-parts")
+    # Built the same way the app builds it, so a label set pointed at a Canvas
+    # rubric is checked against the prompt the grader will really see.
+    rubric_text, criteria = build_rubric(spec)
+    scale = ""
+    if criteria:
+        binary = sum(1 for c in criteria if c.get("binary"))
+        scale = f", {len(criteria)} criteria ({binary} all-or-nothing)"
+    print(f"rubric reads: {len(rubric_text)} chars, "
+          f"{len(spec.get('rubric_parts', {}))} sub-parts{scale}")
 
     rows, problems = [], []
+
+    if criteria:
+        declared = sum(c["points"] for c in criteria if c["points"] is not None)
+        if abs(declared - spec["total_points"]) > 0.01:
+            problems.append(f"the Canvas criteria sum to {declared} but total_points "
+                            f"is {spec['total_points']}")
+        # A criterion with only Full Marks / No Marks cannot be half satisfied,
+        # so a label that says 0.5 describes a grade the rubric cannot express.
+        binary = {_key(c["description"]) for c in criteria if c.get("binary")}
+        for entry in spec["submissions"]:
+            for part, value in (entry.get("satisfies") or {}).items():
+                if 0 < value < 1 and _key(part) in binary:
+                    problems.append(f"{entry['file']}: {part} is all-or-nothing but the "
+                                    f"label says {value}")
     for entry in spec["submissions"] + [
         {"file": p[k], "note": f"probe {p['name']} ({k})"}
         for p in spec.get("probes", []) for k in ("baseline", "variant")

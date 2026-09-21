@@ -83,11 +83,38 @@ def resolve_expected_totals(spec):
         entry["expected_total"] = round(sum(parts[k] * v for k, v in satisfies.items()), 1)
 
 
+def build_rubric(spec):
+    """Assemble the rubric text exactly the way the app assembles it.
+
+    A label set can point at a plain rubric file, or at a Canvas assignment
+    payload plus the task description faculty would upload alongside it. The
+    second path goes through the app's own combiner, so what the evaluation
+    measures is the prompt the app really builds -- including the rating scale,
+    which is what makes an all-or-nothing rubric behave like one.
+    """
+    from app import canvas_rubric
+    from app.routes.rubric import _combine_rubric_sources
+
+    if not spec.get("canvas_rubric_file"):
+        return read_text(spec["rubric_file"]), None
+
+    payload = json.loads((REPO_ROOT / spec["canvas_rubric_file"]).read_text())
+    canvas_part = canvas_rubric.from_assignment(payload)
+    if canvas_part is None:
+        raise SystemExit(f"{spec['canvas_rubric_file']}: no rubric in this payload")
+
+    answer_key = read_text(spec["answer_key_file"]) if spec.get("answer_key_file") else ""
+    criteria = [{"description": c["description"], "points": c["points"],
+                 "binary": bool(c.get("binary"))} for c in canvas_part["criteria"]]
+    return _combine_rubric_sources(canvas_part, answer_key), criteria
+
+
 def grade_once(assignment_name, rubric_text, student_id, student_text, expected_total,
-               passes=1):
+               passes=1, expected_criteria=None):
     result = grading.grade_submission(
         assignment_name, rubric_text, student_id, student_text,
         expected_total=expected_total, passes=passes,
+        expected_criteria=expected_criteria,
     )
     if not result["ok"]:
         return None, result["error"]
@@ -101,6 +128,7 @@ def grade_repeatedly(spec, text, student_id, repeats):
         data, error = grade_once(
             spec["assignment_name"], spec["rubric_text"], student_id, text,
             spec["total_points"], passes=spec.get("_passes", 1),
+            expected_criteria=spec.get("expected_criteria"),
         )
         if error:
             errors.append(error)
@@ -118,6 +146,7 @@ def grade_repeatedly(spec, text, student_id, repeats):
             "raw_disagreement": data.get("raw_disagreement"),
             "structure_retried": bool(data.get("structure_retried")),
             "structural_disagreement": bool(data.get("structural_disagreement")),
+            "snapped": data.get("snapped_awards") or 0,
         }
     return scores, errors, quality
 
@@ -200,6 +229,7 @@ def summarise(rows):
         # happens, so it is worth seeing rather than buried in the log.
         "structure_retried": sum(1 for r in graded if r.get("structure_retried")),
         "structure_unresolved": sum(1 for r in graded if r.get("structural_disagreement")),
+        "snapped": sum(r.get("snapped") or 0 for r in graded),
     }
 
 
@@ -248,6 +278,9 @@ def print_report(spec, rows, probes, summary, repeats):
             print(f"  structure: {summary['structure_retried']} row(s) where the passes split "
                   f"the rubric differently and needed a tie-breaker, "
                   f"{summary['structure_unresolved']} still unresolved")
+        if summary.get("snapped"):
+            print(f"  rubric scale: {summary['snapped']} award(s) snapped back onto an "
+                  f"all-or-nothing criterion")
 
     if probes:
         print("\nBIAS PROBES  (same content, different writing)")
@@ -290,11 +323,12 @@ def main():
     args = parser.parse_args()
 
     spec = json.loads((REPO_ROOT / args.labels).read_text())
-    spec["rubric_text"] = read_text(spec["rubric_file"])
+    spec["rubric_text"], spec["expected_criteria"] = build_rubric(spec)
     resolve_expected_totals(spec)
     spec["_passes"] = args.passes
 
-    print(f"Grading {len(spec['submissions'])} submission(s) against {spec['rubric_file']}")
+    source = spec.get("canvas_rubric_file") or spec["rubric_file"]
+    print(f"Grading {len(spec['submissions'])} submission(s) against {source}")
     rows = evaluate_submissions(spec, args.repeats)
     probes = [] if args.skip_probes else evaluate_probes(spec, args.repeats)
     summary = summarise(rows)

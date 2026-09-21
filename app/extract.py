@@ -508,9 +508,15 @@ def _read_ipynb(content_bytes):
                 parts.append(f"--- cell {index} ({kind}) ---\n{source}")
             continue
 
+        outputs = [o for o in (cell.get("outputs") or []) if isinstance(o, dict)]
+        if not source and not outputs:
+            # Jupyter leaves an empty cell at the bottom of almost every
+            # notebook. Counting it as code the student failed to run puts a
+            # false warning on a complete submission.
+            continue
+
         stats["code_cells"] += 1
         count = cell.get("execution_count")
-        outputs = [o for o in (cell.get("outputs") or []) if isinstance(o, dict)]
         if count is None and not outputs:
             stats["unexecuted"] += 1
             header = f"--- cell {index} (code, NEVER RUN -- no output) ---"
@@ -518,7 +524,7 @@ def _read_ipynb(content_bytes):
             ran_as = f"In[{count}]" if count is not None else "In[?]"
             header = f"--- cell {index} (code, ran as {ran_as}) ---"
 
-        block = [header, source] if source else [header, "(empty cell)"]
+        block = [header, source] if source else [header, "(no code in this cell)"]
         for label, body in _render_outputs(outputs, stats):
             block.append(f"--- {label} ---")
             if body:

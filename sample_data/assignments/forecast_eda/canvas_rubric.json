@@ -1,0 +1,101 @@
+{
+  "_comment": "The Canvas assignment payload for a real IU course assignment, in the shape the Canvas API returns it. Nine all-or-nothing criteria named 'Step 1'..'Step 9' -- the visible name says nothing, and the requirement lives entirely in long_description, which is what Canvas hides behind 'view longer description'. This fixture exists so the binary-rubric path is exercised by the evaluation harness and not only by unit tests.",
+  "name": "Module One Assignment 1 - Forecast and EDA",
+  "points_possible": 14,
+  "rubric_settings": {
+    "title": "Forecast and EDA Rubric",
+    "points_possible": 14
+  },
+  "rubric": [
+    {
+      "id": "_1",
+      "description": "Step 1",
+      "long_description": "Open the file and read the whole dataset.",
+      "points": 1.0,
+      "ratings": [
+        {"id": "r1f", "description": "Full Marks", "points": 1.0},
+        {"id": "r1n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_2",
+      "description": "Step 2",
+      "long_description": "Check for any missing variables. If detected, with 2 methods show how you handle missing values.",
+      "points": 2.0,
+      "ratings": [
+        {"id": "r2f", "description": "Full Marks", "points": 2.0},
+        {"id": "r2n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_3",
+      "description": "Step 3",
+      "long_description": "Verify the dataset for any duplicated rows. If duplicates are identified, eliminate them.",
+      "points": 2.0,
+      "ratings": [
+        {"id": "r3f", "description": "Full Marks", "points": 2.0},
+        {"id": "r3n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_4",
+      "description": "Step 4",
+      "long_description": "Perform feature normalization between 0 and 1 if it is needed. Normalization helps to converge machine learning algorithms faster.",
+      "points": 1.0,
+      "ratings": [
+        {"id": "r4f", "description": "Full Marks", "points": 1.0},
+        {"id": "r4n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_5",
+      "description": "Step 5",
+      "long_description": "Examine the dataset for categorical variables. If any are found, convert them to numerical variables.",
+      "points": 2.0,
+      "ratings": [
+        {"id": "r5f", "description": "Full Marks", "points": 2.0},
+        {"id": "r5n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_6",
+      "description": "Step 6",
+      "long_description": "Find correlations between the variables and visualize the correlation matrix using a heatmap (1 plot) and scatterplots (minimum 2 plots).",
+      "points": 2.0,
+      "ratings": [
+        {"id": "r6f", "description": "Full Marks", "points": 2.0},
+        {"id": "r6n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_7",
+      "description": "Step 7",
+      "long_description": "Designate all features, excluding the two last columns (\"Next_Tmax\" and \"Next_Tmin\"), as X_variables.",
+      "points": 1.0,
+      "ratings": [
+        {"id": "r7f", "description": "Full Marks", "points": 1.0},
+        {"id": "r7n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_8",
+      "description": "Step 8",
+      "long_description": "Add a column named \"Next_Taverage\". The values in this column are the average of columns \"Next_Tmin\" and \"Next_Tmax\". Assign the \"Next_Taverage\" column as the Y_variable.",
+      "points": 1.0,
+      "ratings": [
+        {"id": "r8f", "description": "Full Marks", "points": 1.0},
+        {"id": "r8n", "description": "No Marks", "points": 0.0}
+      ]
+    },
+    {
+      "id": "_9",
+      "description": "Step 9",
+      "long_description": "Remove correlated variables. Explain which variables should be removed and why.",
+      "points": 2.0,
+      "ratings": [
+        {"id": "r9f", "description": "Full Marks", "points": 2.0},
+        {"id": "r9n", "description": "No Marks", "points": 0.0}
+      ]
+    }
+  ]
+}

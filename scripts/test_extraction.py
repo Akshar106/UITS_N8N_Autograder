@@ -378,6 +378,16 @@ def test_notebook():
     check("truncation keeps the beginning of the output", "row 0" in huge.text)
     check("truncation is bounded", len(huge.text) < 4000)
 
+    # Jupyter leaves an empty cell at the bottom of almost every notebook. A
+    # real submission tripped this: a complete paper carrying a false warning.
+    tidy = read("hw.ipynb", notebook([
+        code_cell(["df.head()"], count=1, outputs=[{"output_type": "stream",
+                                                    "name": "stdout", "text": ["ok"]}]),
+        {"cell_type": "code", "execution_count": None, "source": [], "outputs": []},
+    ]))
+    check("an empty trailing cell is not counted as code", tidy.stats["code_cells"] == 1)
+    check("an empty trailing cell raises no warning", tidy.notes == [])
+
     check("a notebook with no code cells is reported, not refused",
           any("no code cells" in note for note in
               read("hw.ipynb", notebook([{"cell_type": "markdown",
