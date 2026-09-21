@@ -1,0 +1,66 @@
+Q1. A BST is a binary tree where each node's left subtree holds only smaller keys and the right subtree only larger keys.
+
+    insert(node, key):
+        if node == null: return Node(key)
+        if key < node.key: node.left = insert(node.left, key)
+        else: node.right = insert(node.right, key)
+        return node
+
+Search, insert and delete all run in O(log n).
+
+The worst case is a degenerate tree. If you insert keys in sorted order the tree becomes a chain with height n instead of log n, so operations walk the whole thing.
+
+Q2.
+    BFS(g, s):
+        queue = [s]
+        visited = {}
+        while queue not empty:
+            u = queue.dequeue()
+            visited.add(u)
+            for v in neighbours(u):
+                if v not in visited:
+                    queue.enqueue(v)
+
+BFS is O(V + E).
+
+It gives shortest paths on an unweighted graph because it works outward level by level, so a vertex is first reached at its minimum distance.
+
+DFS uses a stack instead and goes deep before wide.
+
+Q3.
+    merge_sort(A):
+        if len(A) <= 1: return A
+        mid = len(A) // 2
+        return merge(merge_sort(A[:mid]), merge_sort(A[mid:]))
+
+    merge(L, R): repeatedly take the smaller front element of L and R until both are exhausted.
+
+The recurrence is T(n) = 2T(n/2) + O(n), where the O(n) is the merge step.
+
+Solving it: there are log n levels and each level merges O(n) elements in total, so T(n) = O(n log n). The Master theorem gives the same result.
+
+Merge sort needs O(n) extra space for the merge buffer.
+
+Q4. A collision is when two different keys hash to the same bucket. Separate chaining handles it by storing a linked list at each bucket containing everything that hashed there.
+
+Open addressing instead looks for a different free slot in the array itself, using linear probing, quadratic probing or double hashing.
+
+The load factor is n/m and a high load factor makes the table slower, so implementations resize when it gets too high.
+
+Insertion is amortised O(1).
+
+Q5. dp[i][c] is the best value using the first i items with capacity c.
+
+    dp[i][c] = dp[i-1][c]                                if w[i] > c
+    dp[i][c] = max(dp[i-1][c], v[i] + dp[i-1][c-w[i]])   otherwise
+
+    for i in 1..n:
+        for c in 0..W:
+            dp[i][c] = dp[i-1][c]
+            if w[i] <= c:
+                dp[i][c] = max(dp[i][c], v[i] + dp[i-1][c-w[i]])
+    return dp[n][W]
+
+This runs in O(nW).
+
+Plain recursion would be much slower because it keeps recomputing the same subproblems over and over, whereas the table stores each one.

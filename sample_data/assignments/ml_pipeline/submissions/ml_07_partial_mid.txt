@@ -1,0 +1,51 @@
+Q1. TotalCharges comes in as text because some of the values are blank, so I convert it with to_numeric and fill what is left with the median of the column. The three categorical columns need one-hot encoding since the model cannot work with strings. I scale the numeric columns so that the larger ones like TotalCharges do not dominate the smaller ones like tenure.
+
+Q2.
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.model_selection import train_test_split
+
+    df = pd.read_csv("telco_churn.csv")
+    df["TotalCharges"] = pd.to_numeric(df["TotalCharges"], errors="coerce")
+    df["TotalCharges"] = df["TotalCharges"].fillna(df["TotalCharges"].median())
+
+    y = (df["Churn"] == "Yes").astype(int)
+    X = df.drop(columns=["Churn", "customerID"])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42)
+
+    num = ["tenure", "MonthlyCharges", "TotalCharges", "SeniorCitizen"]
+    cat = ["Contract", "PaymentMethod", "InternetService"]
+
+    scaler = StandardScaler().fit(X_train[num])
+    X_train_num = scaler.transform(X_train[num])
+    X_test_num = scaler.transform(X_test[num])
+
+    encoder = OneHotEncoder(sparse_output=False).fit(X_train[cat])
+    X_train_cat = encoder.transform(X_train[cat])
+    X_test_cat = encoder.transform(X_test[cat])
+
+I fit the scaler and the encoder on the training data only and then apply them to the test data, so the test set does not affect the training.
+
+Q3.
+    df["avg_charge"] = df["TotalCharges"] / df["tenure"]
+
+Average charge per month should be informative because it tells you how expensive the customer is relative to how long they have been around.
+
+Q4.
+    from sklearn.linear_model import LogisticRegression
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X_train_final, y_train)
+
+The split is stratified because the dataset is imbalanced and I want the same proportion of churners in both halves. I chose logistic regression because it is easy to interpret and gives you coefficients you can explain to a business audience.
+
+Q5.
+    from sklearn.metrics import classification_report, roc_auc_score
+    preds = model.predict(X_test_final)
+    print(classification_report(y_test, preds))
+    print("ROC-AUC:", roc_auc_score(y_test, model.predict_proba(X_test_final)[:, 1]))
+
+Accuracy on its own is not a good measure here. Only 26.5% of the customers churn, so a model that always says "No" would be right 73.5% of the time and would look like it was working when it had learned nothing at all. classification_report gives precision, recall and F1 per class, which is much more informative, and I add ROC-AUC as a threshold-independent summary.
+
+Q6. There is something wrong with the ordering here. The scaling happens before the data is split, which means the training and test sets are not being kept properly separate. You should be careful about the order of these operations.

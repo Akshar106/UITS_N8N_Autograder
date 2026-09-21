@@ -47,6 +47,42 @@ def read_text(relative_path):
     return extract.extract_text(path.name, path.read_bytes())
 
 
+def resolve_expected_totals(spec):
+    """Turn per-part specs into expected scores, and check they are coherent.
+
+    A label written as "satisfies Q1a fully and Q1b halfway" is arithmetic, not
+    an opinion, and a disagreement can then be traced to a specific rubric
+    requirement rather than to a number somebody guessed. Labels that already
+    carry expected_total directly are left alone.
+    """
+    parts = spec.get("rubric_parts")
+    if parts:
+        declared = sum(parts.values())
+        if abs(declared - spec["total_points"]) > 0.01:
+            raise SystemExit(
+                f"rubric_parts sum to {declared} but total_points is {spec['total_points']}"
+            )
+
+    for entry in spec["submissions"]:
+        satisfies = entry.get("satisfies")
+        if satisfies is None:
+            if "expected_total" not in entry:
+                raise SystemExit(f"{entry['file']}: needs either satisfies or expected_total")
+            continue
+        if not parts:
+            raise SystemExit(f"{entry['file']}: uses satisfies but the labels define no rubric_parts")
+        unknown = sorted(set(satisfies) - set(parts))
+        if unknown:
+            raise SystemExit(f"{entry['file']}: unknown rubric part(s) {unknown}")
+        missing = sorted(set(parts) - set(satisfies))
+        if missing:
+            raise SystemExit(f"{entry['file']}: no verdict for rubric part(s) {missing}")
+        bad = {k: v for k, v in satisfies.items() if not 0 <= v <= 1}
+        if bad:
+            raise SystemExit(f"{entry['file']}: satisfaction must be between 0 and 1: {bad}")
+        entry["expected_total"] = round(sum(parts[k] * v for k, v in satisfies.items()), 1)
+
+
 def grade_once(assignment_name, rubric_text, student_id, student_text, expected_total):
     result = grading.grade_submission(
         assignment_name, rubric_text, student_id, student_text, expected_total=expected_total
@@ -149,22 +185,22 @@ def summarise(rows):
 
 
 def print_report(spec, rows, probes, summary, repeats):
-    print("\n" + "=" * 85)
+    print("\n" + "=" * 97)
     print(f"GRADING EVALUATION  --  {spec['assignment_name']}  ({repeats} run(s) per submission)")
-    print("=" * 85)
+    print("=" * 97)
 
-    print(f"\n{'submission':<20}{'expected':>10}{'scored':>10}{'error':>9}"
+    print(f"\n{'submission':<32}{'expected':>10}{'scored':>10}{'error':>9}"
           f"{'spread':>9}{'conf':>9}{'quotes':>16}")
-    print("-" * 85)
+    print("-" * 97)
     for row in rows:
         if "score" not in row:
-            print(f"{row['name']:<20}{row['expected']:>10}{'FAILED':>10}   "
+            print(f"{row['name']:<32}{row['expected']:>10}{'FAILED':>10}   "
                   f"{(row['errors'] or ['unknown'])[0][:32]}")
             continue
         quotes = f"{row.get('quoted', 0)}/{row.get('questions', 0)}"
         if row.get("unverified"):
             quotes += f" ({row['unverified']} bad)"
-        print(f"{row['name']:<20}{row['expected']:>10}{row['score']:>10}"
+        print(f"{row['name']:<32}{row['expected']:>10}{row['score']:>10}"
               f"{row['error_points']:>+9.1f}{row['spread']:>9.1f}"
               f"{(row.get('confidence') or '-'):>9}{quotes:>16}")
 
@@ -186,7 +222,7 @@ def print_report(spec, rows, probes, summary, repeats):
 
     if probes:
         print("\nBIAS PROBES  (same content, different writing)")
-        print("-" * 85)
+        print("-" * 97)
         for probe in probes:
             if probe["passed"] is None:
                 print(f"  {probe['name']:<12} could not be graded")
@@ -198,10 +234,17 @@ def print_report(spec, rows, probes, summary, repeats):
                 print(f"               {probe['why']}")
 
     if spec.get("label_source") != "human":
+        constructed = spec.get("label_source") == "constructed"
+        origin = ("CONSTRUCTED LABELS -- each expected score is the weighted sum of the rubric\n"
+                  "sub-parts the submission was written to satisfy. That makes a disagreement\n"
+                  "traceable to a specific requirement, but the verdicts are still the author's\n"
+                  "reading of these answers"
+                  if constructed else
+                  "PROVISIONAL LABELS -- these expected scores were estimated")
         print("\n" + "!" * 78)
-        print("PROVISIONAL LABELS -- these expected scores were estimated, not assigned by a")
-        print("TA. Treat the accuracy figures above as a regression check only. Do not quote")
-        print("them to faculty or to UITS as the tool's accuracy.")
+        print(f"{origin}, not grades a TA assigned. Treat the")
+        print("accuracy figures above as a regression check only. Do not quote them to faculty")
+        print("or to UITS as the tool's accuracy.")
         print("!" * 78)
 
 
@@ -216,6 +259,7 @@ def main():
 
     spec = json.loads((REPO_ROOT / args.labels).read_text())
     spec["rubric_text"] = read_text(spec["rubric_file"])
+    resolve_expected_totals(spec)
 
     print(f"Grading {len(spec['submissions'])} submission(s) against {spec['rubric_file']}")
     rows = evaluate_submissions(spec, args.repeats)

@@ -1,0 +1,59 @@
+Q1. The TotalCharges column is stored as text because eleven rows contain an empty string rather than a value. Every one of those eleven has tenure 0, which tells us they are newly signed customers who have not yet received a bill — the correct total for them is 0, and that is the value I impute. This is a case where "missing" is not missing at all but a structural zero, and treating it as unknown would throw away the fact.
+
+Contract, PaymentMethod and InternetService are nominal, so one-hot encoding is the right default: an integer code would tell a linear model that "Two year" is twice "One year", which is meaningless. Contract could be argued as ordinal since the durations really do order, and I would accept that encoding from someone who justified it.
+
+Scaling matters for the numeric columns because tenure runs 0-72 while TotalCharges runs into the thousands. Any model that measures distances or applies a regularisation penalty will be dominated by the larger-magnitude column otherwise. For a tree-based model it is unnecessary, since splits are invariant to monotone transformations.
+
+Q2.
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.model_selection import train_test_split
+
+    df = pd.read_csv("telco_churn.csv")
+    df["TotalCharges"] = pd.to_numeric(df["TotalCharges"], errors="coerce").fillna(0)
+
+    num = ["tenure", "MonthlyCharges", "TotalCharges", "SeniorCitizen"]
+    cat = ["Contract", "PaymentMethod", "InternetService"]
+
+    scaler = StandardScaler()
+    df[num] = scaler.fit_transform(df[num])
+
+    encoder = OneHotEncoder(sparse_output=False)
+    encoded = encoder.fit_transform(df[cat])
+
+    X = pd.concat([df[num], pd.DataFrame(encoded, index=df.index)], axis=1)
+    y = (df["Churn"] == "Yes").astype(int)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y)
+
+Q3.
+    df["avg_monthly_spend"] = df["TotalCharges"] / df["tenure"]
+    df["is_month_to_month"] = (df["Contract"] == "Month-to-month").astype(int)
+
+avg_monthly_spend distinguishes a long-tenured customer on a cheap plan from a recent customer on an expensive one; the second profile churns far more often because the bill is large and nothing holds them in place. is_month_to_month is the single most predictive structural fact in telco churn: a customer with no lock-in can leave at the end of any billing cycle, whereas a two-year customer would pay to do so.
+
+Q4.
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import GridSearchCV, StratifiedKFold
+
+    grid = GridSearchCV(LogisticRegression(max_iter=1000, class_weight="balanced"),
+                        {"C": [0.01, 0.1, 1, 10]},
+                        cv=StratifiedKFold(5, shuffle=True, random_state=1),
+                        scoring="average_precision")
+    grid.fit(X_train, y_train)
+
+The split and the folds are both stratified because the positive class is 26.5% of the data and unstratified folds would vary enough to make the cross-validated score unreliable. Logistic regression is chosen for interpretability: the retention team wants to know which factors drive churn, and coefficients answer that directly. The search is scored on average precision rather than accuracy, since accuracy would push the model toward always predicting the majority class.
+
+Q5. Accuracy is misleading on this dataset because 73.5% of customers do not churn — a model that predicts "No" unconditionally already scores 73.5%, and any headline accuracy has to be read against that floor.
+
+Precision is the fraction of flagged customers who really churn; recall is the fraction of real churners we catch; F1 balances the two. For churn I would prioritise recall, because a missed churner is revenue gone for good while a false positive costs only a retention discount offered to someone who was staying.
+
+PR-AUC is more informative than ROC-AUC under imbalance, because ROC-AUC's false-positive rate is diluted by the large negative class and stays flattering even for a weak model.
+
+    from sklearn.metrics import classification_report, average_precision_score
+    print(classification_report(y_test, grid.predict(X_test)))
+    print(average_precision_score(y_test, grid.predict_proba(X_test)[:, 1]))
+
+Q6. The scaler is fitted on the whole of X before the split, so the test rows contribute to the means and standard deviations used to transform the training rows. The test set is no longer unseen and the 94% is optimistic.
+
+The fix is to split first, fit the scaler on X_train alone, and transform X_test with that fitted scaler — or to put the scaler in a Pipeline with the model so that cross-validation refits it correctly on every fold.

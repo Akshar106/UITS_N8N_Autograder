@@ -82,6 +82,7 @@ Everything under `scripts/` runs from the repository root.
 | `test_review_integrity.py` | nothing | An approved grade always describes the work it is attached to: approvals expire when a student resubmits or the rubric changes, faculty edits are never destroyed, owner scoping holds, and an older database upgrades in place. |
 | `test_grading.py` | LLM key | Grades the bundled sample submissions and writes an `.xlsx`, so you can eyeball real output without Canvas. |
 | `probe_vision.py` | LLM key | Answers "can the configured model see images?" — sends a generated image containing a random code and checks whether the model reads it back. A yes/no fact, not an opinion. |
+| `check_labels.py` | nothing | Validates a label set: sub-parts sum to the total, every submission has a verdict on every part, referenced files exist and extract, and the score distribution is not all extremes. |
 | `eval_grading.py` | LLM key | **Measures** the grader: mean error against known scores, run-to-run spread, and bias probes for writing fluency and answer length. |
 
 `eval_grading.py` is the only thing here that answers "how accurate is the
@@ -92,7 +93,27 @@ python3 scripts/eval_grading.py              # accuracy + bias probes
 python3 scripts/eval_grading.py --repeats 3  # also check the score is reproducible
 ```
 
-The bundled labels in `sample_data/eval/labels.json` are **estimates, not TA
+Three label sets ship with the repo:
+
+```bash
+python3 scripts/eval_grading.py                                                     # short DSA prose set
+python3 scripts/eval_grading.py --labels sample_data/assignments/dsa_midterm/labels.json
+python3 scripts/eval_grading.py --labels sample_data/assignments/ml_pipeline/labels.json
+```
+
+The two under `sample_data/assignments/` are full 100-point papers — a data
+structures midterm with pseudocode and complexity analysis, and an end-to-end ML
+pipeline mixing prose with Python. Their labels are **constructed, not
+estimated**: each rubric question is split into weighted sub-parts, every
+submission was written against a spec saying which sub-parts it satisfies (1,
+0.5 or 0), and the expected score is the weighted sum. A disagreement is then
+traceable to a specific requirement instead of to a number somebody guessed.
+Two submissions exist purely to catch known failure modes — one whose prose
+describes data leakage perfectly while its own code commits it, and one that is
+fully correct by an unconventional route and should score the same as the model
+answer.
+
+The older labels in `sample_data/eval/labels.json` are **estimates, not TA
 grades** — enough to catch a regression, not evidence of accuracy. To claim a
 real accuracy figure, label submissions from a completed assignment with the
 scores a TA actually gave, ideally with two TAs grading independently so you

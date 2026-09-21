@@ -1,0 +1,114 @@
+INFO-I513 Applied Machine Learning — Assignment 3
+End-to-End Pipeline on a Customer Churn Dataset
+Total: 100 points
+
+THE DATASET
+
+You are given telco_churn.csv, 7,043 rows, one row per customer:
+
+  customerID       string, unique
+  tenure           integer, months with the company (0-72)
+  MonthlyCharges   float, dollars
+  TotalCharges     float, dollars — 11 rows are blank strings, all with tenure 0
+  Contract         categorical: Month-to-month | One year | Two year
+  PaymentMethod    categorical, 4 levels
+  InternetService  categorical: DSL | Fiber optic | No
+  SeniorCitizen    integer 0/1
+  Churn            target, Yes/No — 26.5% Yes
+
+Answer in prose where the question asks you to explain, and in Python
+(pandas / scikit-learn) where it asks for code. Code is graded on whether it
+would work and whether it is methodologically sound, not on style.
+
+════════════════════════════════════════════════════════════════════════════
+Q1. Preprocessing plan (15 points) — explanation only
+
+Describe how you will prepare this dataset and justify each choice.
+
+  (a) 5 pts — Identifies that TotalCharges is blank for 11 tenure-0 customers
+      and proposes a defensible treatment: impute 0 (they have been billed
+      nothing yet), impute the median, or drop 11 of 7,043 rows. Any of those
+      with a reason earns full credit; noticing the tenure-0 link earns the
+      full 5 even if the chosen fix differs.
+  (b) 5 pts — Encoding for the categorical columns, with a reason: one-hot for
+      unordered categories such as PaymentMethod and InternetService; ordinal
+      is defensible for Contract if the ordering is argued.
+  (c) 5 pts — Scaling the numeric columns, with a reason tied to the model
+      (needed for distance- or gradient-based models, unnecessary for trees).
+      An answer that scales blindly with no reason earns at most 2.
+
+════════════════════════════════════════════════════════════════════════════
+Q2. Preprocessing code (20 points)
+
+Write the code that implements your plan.
+
+  (a) 6 pts — Uses a scikit-learn Pipeline and ColumnTransformer (or an
+      equivalent construction that applies different transforms to numeric and
+      categorical columns as one fitted object).
+  (b) 5 pts — Missing TotalCharges handled in code, consistent with Q1(a):
+      coerced with pd.to_numeric(..., errors="coerce") and imputed or dropped.
+  (c) 5 pts — Categorical encoding applied correctly, with unseen categories
+      at prediction time handled (handle_unknown="ignore") or the risk noted.
+  (d) 4 pts — No leakage: the transformer is fitted on the training split
+      only, never on the full dataset before splitting.
+
+════════════════════════════════════════════════════════════════════════════
+Q3. Feature engineering (15 points)
+
+Propose and implement engineered features.
+
+  (a) 6 pts — At least two sensible features beyond the raw columns, for
+      example average charge per month of tenure (TotalCharges / tenure),
+      a tenure bucket, or a flag for month-to-month contracts.
+  (b) 5 pts — Each feature justified in domain terms — why it should carry
+      signal about churn — rather than listed without reason.
+  (c) 4 pts — Correct code, including protection against division by zero for
+      tenure-0 customers.
+
+════════════════════════════════════════════════════════════════════════════
+Q4. Model training (20 points)
+
+Train a model and select its hyperparameters.
+
+  (a) 5 pts — A stratified train/test split, with the stratification justified
+      by the 26.5% positive rate.
+  (b) 5 pts — Cross-validation on the training split (StratifiedKFold or
+      cross_val_score with an appropriate cv).
+  (c) 4 pts — A model choice with a reason. Any reasonable classifier earns
+      full credit if the reason is sound.
+  (d) 6 pts — Hyperparameter search (GridSearchCV, RandomizedSearchCV or
+      equivalent) over named parameters, scored on an appropriate metric
+      rather than the default accuracy.
+
+════════════════════════════════════════════════════════════════════════════
+Q5. Evaluation (20 points)
+
+Evaluate the model and justify your metrics.
+
+  (a) 6 pts — Explains that accuracy is misleading here: predicting "No" for
+      everyone scores 73.5%. The answer must connect the number to the class
+      balance, not merely assert that accuracy is bad.
+  (b) 6 pts — Precision, recall and F1 defined correctly, with a statement of
+      which matters more for churn and why (recall, because a missed churner
+      is a lost customer; or precision, if retention offers are costly — either
+      earns full credit when argued).
+  (c) 4 pts — ROC-AUC or PR-AUC reported, with PR-AUC noted as the better
+      choice under class imbalance.
+  (d) 4 pts — Code that computes the chosen metrics on the held-out test set.
+
+════════════════════════════════════════════════════════════════════════════
+Q6. Spot the leakage (10 points)
+
+This snippet was submitted by a classmate. It reports 94% accuracy.
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y)
+    model.fit(X_train, y_train)
+    print(model.score(X_test, y_test))
+
+  (a) 6 pts — Identifies that the scaler is fitted on the whole of X before
+      the split, so the test rows' means and variances leak into training.
+  (b) 4 pts — The fix: split first, fit the scaler on X_train only, and apply
+      the fitted scaler to X_test — ideally inside a Pipeline so it cannot be
+      got wrong.

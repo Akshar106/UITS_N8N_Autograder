@@ -1,0 +1,9 @@
+Q1. A binary search tree is a data structure used for storing data efficiently. It is fast because it is organised. The complexity is O(log n).
+
+Q2. BFS stands for breadth first search. It searches the graph broadly. You use a queue for it. It is efficient.
+
+Q3. Merge sort is a divide and conquer sorting algorithm. It is O(n log n) which is very good compared to bubble sort.
+
+Q4. Hash tables store key value pairs. Collisions happen sometimes and there are ways to deal with them. They are O(1).
+
+Q5. Dynamic programming solves the knapsack problem by breaking it into subproblems and storing the answers so you do not repeat work. It is much faster than recursion.

@@ -1,0 +1,39 @@
+Q1. I dropped the rows with missing TotalCharges since there were only a few. I converted the categorical columns to numbers using label encoding so the model can use them. I scaled everything with StandardScaler because scaling is a standard preprocessing step that you should always do.
+
+Q2.
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler, LabelEncoder
+    from sklearn.model_selection import train_test_split
+
+    df = pd.read_csv("telco_churn.csv")
+    df = df.dropna()
+
+    for col in ["Contract", "PaymentMethod", "InternetService"]:
+        df[col] = LabelEncoder().fit_transform(df[col])
+
+    X = df.drop(columns=["Churn"])
+    y = df["Churn"].map({"Yes": 1, "No": 0})
+
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+Q3.
+    df["total_over_tenure"] = df["TotalCharges"] / df["tenure"]
+
+This gives an average which should help the model.
+
+Q4.
+    from sklearn.ensemble import RandomForestClassifier
+    model = RandomForestClassifier()
+    model.fit(X_train, y_train)
+
+I used a random forest because random forests usually perform well.
+
+Q5.
+    print("Accuracy:", model.score(X_test, y_test))
+
+The model achieved 79% accuracy, which is a good result for this problem and shows the pipeline works.
+
+Q6. The code has a problem because it does not set a random_state, so the results will not be reproducible. It should pass random_state=42 to train_test_split.

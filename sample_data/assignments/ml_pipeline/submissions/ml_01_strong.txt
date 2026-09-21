@@ -1,0 +1,107 @@
+Q1. Preprocessing plan
+
+TotalCharges arrives as a string column because 11 rows hold a blank instead of a number, and every one of those rows has tenure 0 — they are customers who signed up but have not yet been billed. Their true total is therefore 0, not missing at random, so I coerce the column to numeric and fill those 11 with 0 rather than the median. Dropping them would also be defensible at 11 out of 7,043, but imputing 0 keeps the information that they are brand new.
+
+Contract, PaymentMethod and InternetService are unordered from the model's point of view, so I one-hot encode them. Contract does have a natural ordering (month-to-month < one year < two year) and an ordinal encoding would be defensible, but one-hot costs two extra columns and avoids asserting that the gap between one and two years equals the gap between month-to-month and one year.
+
+I scale tenure, MonthlyCharges and TotalCharges with StandardScaler because they are on wildly different ranges — months versus dollars in the thousands — and logistic regression's coefficients and any regularisation penalty are sensitive to that. If I ended up using only tree models I would drop the scaler, since trees split on thresholds and are indifferent to monotone rescaling.
+
+Q2. Preprocessing code
+
+    import pandas as pd
+    from sklearn.compose import ColumnTransformer
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.model_selection import train_test_split
+
+    df = pd.read_csv("telco_churn.csv")
+    df["TotalCharges"] = pd.to_numeric(df["TotalCharges"], errors="coerce").fillna(0)
+
+    y = (df["Churn"] == "Yes").astype(int)
+    X = df.drop(columns=["Churn", "customerID"])
+
+    numeric = ["tenure", "MonthlyCharges", "TotalCharges", "SeniorCitizen"]
+    categorical = ["Contract", "PaymentMethod", "InternetService"]
+
+    preprocess = ColumnTransformer([
+        ("num", Pipeline([("impute", SimpleImputer(strategy="median")),
+                          ("scale", StandardScaler())]), numeric),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+    ])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42)
+
+customerID is dropped because it is a unique identifier and carries no signal — leaving it in would let a tree memorise individual customers. handle_unknown="ignore" means a category absent from the training split does not crash prediction. Crucially the ColumnTransformer is never fitted here: it goes inside the model pipeline below, so it is fitted only on training folds and the test set's statistics never influence the imputer's medians or the scaler's means.
+
+Q3. Feature engineering
+
+    def add_features(df):
+        df = df.copy()
+        df["avg_monthly_spend"] = df["TotalCharges"] / df["tenure"].replace(0, 1)
+        df["is_month_to_month"] = (df["Contract"] == "Month-to-month").astype(int)
+        df["tenure_bucket"] = pd.cut(df["tenure"], bins=[-1, 6, 24, 72],
+                                     labels=["new", "established", "loyal"])
+        return df
+
+avg_monthly_spend separates a customer who has paid $2,000 over five years from one who has paid $2,000 in six months; the second is on a far more expensive plan and, in this business, far likelier to leave when a competitor calls. The .replace(0, 1) guards the eleven tenure-0 customers against a division by zero.
+
+is_month_to_month captures the single strongest churn lever in telco data: a customer with no contractual lock-in can leave this month, while a two-year customer faces an exit fee.
+
+tenure_bucket exists because churn risk is not linear in tenure — it is concentrated in the first few months and then flattens, and a bucketed feature lets a linear model express that shape.
+
+Q4. Model training
+
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import GridSearchCV, StratifiedKFold
+
+    pipe = Pipeline([("prep", preprocess),
+                     ("clf", LogisticRegression(max_iter=1000, class_weight="balanced"))])
+
+    grid = {"clf__C": [0.01, 0.1, 1, 10],
+            "clf__penalty": ["l1", "l2"],
+            "clf__solver": ["liblinear"]}
+
+    search = GridSearchCV(pipe, grid,
+                          cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+                          scoring="average_precision", n_jobs=-1)
+    search.fit(X_train, y_train)
+
+The split is stratified because the positive class is only 26.5%; an unstratified split can easily hand one fold a materially different churn rate and make the cross-validation scores noisy. StratifiedKFold preserves that ratio in every fold for the same reason.
+
+Logistic regression is the choice because the deliverable here is a retention team that wants to know which factors drive churn, and coefficients are directly interpretable. A gradient-boosted tree would likely score a point or two higher and explain nothing.
+
+The grid searches regularisation strength and type, scored on average_precision rather than the default accuracy — optimising accuracy on an imbalanced problem selects the hyperparameters that best predict "No".
+
+Q5. Evaluation
+
+Accuracy is close to useless here. Predicting "No" for every single customer scores 73.5%, because that is the share of the data that does not churn. A model reporting 78% accuracy sounds respectable and is barely better than answering nothing at all.
+
+Precision is the share of customers we flag who really do churn; recall is the share of real churners we manage to flag; F1 is their harmonic mean. For a retention programme I weight recall higher: a churner we fail to identify is a customer lost permanently, whereas a false positive costs only the discount offered to someone who was staying anyway. If the retention offer were expensive — a free handset, say — that calculus would flip toward precision.
+
+I report PR-AUC alongside ROC-AUC. ROC-AUC is inflated under imbalance because the large negative class makes the false-positive rate move slowly, so a mediocre model still looks good; the precision-recall curve ignores true negatives and shows the trade-off that actually matters on the minority class.
+
+    from sklearn.metrics import (classification_report, confusion_matrix,
+                                 roc_auc_score, average_precision_score)
+
+    best = search.best_estimator_
+    proba = best.predict_proba(X_test)[:, 1]
+    preds = best.predict(X_test)
+
+    print(confusion_matrix(y_test, preds))
+    print(classification_report(y_test, preds, digits=3))
+    print("ROC-AUC", roc_auc_score(y_test, proba))
+    print("PR-AUC ", average_precision_score(y_test, proba))
+
+Q6. Spot the leakage
+
+The scaler is fitted on the whole of X before the split, so the means and standard deviations it learns are computed partly from rows that later become the test set. Those rows have therefore influenced the transformation applied to the training data, and the test score is measured on data the pipeline has already seen in aggregate. It is not as severe as leaking the target, but it reliably flatters the reported number — 94% here is not a number anyone should believe.
+
+The fix is to split first and fit only on the training rows:
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y)
+    scaler = StandardScaler().fit(X_train)
+    X_train_s, X_test_s = scaler.transform(X_train), scaler.transform(X_test)
+
+Better still, put the scaler inside a Pipeline with the model. Then cross-validation refits it on each training fold automatically and there is no way to get this wrong by accident.

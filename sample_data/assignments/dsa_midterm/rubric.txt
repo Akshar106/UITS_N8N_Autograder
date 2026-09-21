@@ -1,0 +1,99 @@
+CSCI-C343 Data Structures — Midterm Examination
+Total: 100 points
+
+Answer all five questions. Where pseudocode is requested, any clear notation is
+acceptable; you are graded on the algorithm, not on syntax. State complexities
+in Big-O and say what n (and V, E, W where relevant) refer to.
+
+════════════════════════════════════════════════════════════════════════════
+Q1. Binary Search Trees (20 points)
+
+Define a binary search tree, give pseudocode for insertion, state the time
+complexity of search, insertion and deletion, and explain the worst case.
+
+  (a) 5 pts — The BST ordering property: for every node, all keys in the left
+      subtree are less than the node's key and all keys in the right subtree
+      are greater. Credit any equivalent statement of the invariant.
+  (b) 5 pts — Correct insertion pseudocode: compare against the current node,
+      descend left or right accordingly, insert at the empty position reached.
+      Recursive or iterative both acceptable.
+  (c) 5 pts — Search, insert and delete are O(log n) average and O(n) worst
+      case. All three must be stated; full marks require both cases.
+  (d) 5 pts — The worst case arises when the tree degenerates into a path
+      (e.g. inserting already-sorted keys), leaving height n rather than
+      log n. Requires naming a cause, not just asserting the bound.
+
+════════════════════════════════════════════════════════════════════════════
+Q2. Breadth-First Search (20 points)
+
+Give pseudocode for BFS on an unweighted graph, analyse its complexity, and
+contrast it with depth-first search.
+
+  (a) 7 pts — Correct pseudocode: initialise a queue with the source, mark it
+      visited, then repeatedly dequeue a vertex and enqueue each unvisited
+      neighbour, marking it visited on enqueue. Marking on dequeue instead of
+      enqueue is a defect worth at most 4 of the 7.
+  (b) 5 pts — O(V + E) time, with a justification: every vertex is enqueued
+      once and every edge examined once (twice for an undirected adjacency
+      list). O(V) auxiliary space for the queue and visited set.
+  (c) 4 pts — BFS finds shortest paths in an unweighted graph because it
+      explores all vertices at distance k before any at distance k+1.
+  (d) 4 pts — Contrast with DFS: stack (or recursion) instead of a queue,
+      explores deeply before broadly, does not give shortest paths, and uses
+      O(h) space where h is the depth reached.
+
+════════════════════════════════════════════════════════════════════════════
+Q3. Merge Sort and Recurrences (20 points)
+
+Give pseudocode for merge sort, write and solve its recurrence, and state its
+space complexity and stability.
+
+  (a) 6 pts — Correct pseudocode: split the array in half, recurse on each
+      half, merge the two sorted halves. A base case of length 0 or 1 must be
+      present or implied.
+  (b) 5 pts — The recurrence T(n) = 2T(n/2) + O(n), with the O(n) term
+      identified as the cost of merging.
+  (c) 4 pts — Solved to O(n log n), by the Master theorem or by observing
+      log n levels each costing O(n).
+  (d) 5 pts — O(n) auxiliary space for the merge buffer, and merge sort is
+      stable provided the merge takes from the left half on ties.
+
+════════════════════════════════════════════════════════════════════════════
+Q4. Hash Tables (20 points)
+
+Explain collision resolution, the role of the load factor, and why a dynamic
+hash table achieves O(1) amortised insertion.
+
+  (a) 5 pts — A collision is two distinct keys hashing to the same index.
+      Separate chaining stores a list (or other container) of entries per
+      bucket.
+  (b) 5 pts — Open addressing probes for another slot within the table, with
+      at least one named scheme: linear probing, quadratic probing, or double
+      hashing.
+  (c) 5 pts — The load factor α = n/m drives performance: chaining degrades to
+      O(1 + α) per operation, open addressing degrades sharply as α approaches
+      1, hence resizing at a threshold such as 0.75.
+  (d) 5 pts — Amortised O(1) insertion: doubling capacity costs O(n) to rehash
+      but happens only after n insertions, so the cost spread over those
+      insertions is constant. Requires the argument, not just the phrase
+      "amortised O(1)".
+
+════════════════════════════════════════════════════════════════════════════
+Q5. Dynamic Programming — 0/1 Knapsack (20 points)
+
+Given n items with weights w[i] and values v[i], and a capacity W, give the
+recurrence and pseudocode for the maximum attainable value, analyse the cost,
+and explain why dynamic programming beats naive recursion here.
+
+  (a) 6 pts — The recurrence:
+        dp[i][c] = dp[i-1][c]                                  if w[i] > c
+        dp[i][c] = max(dp[i-1][c], v[i] + dp[i-1][c - w[i]])   otherwise
+      with dp[0][c] = 0. Equivalent formulations earn full credit.
+  (b) 6 pts — Pseudocode filling the table in a valid order, returning
+      dp[n][W]. A 1-D rolling array iterating capacity downward is equally
+      correct and earns full marks.
+  (c) 4 pts — O(nW) time and O(nW) space, or O(W) space with the rolling
+      array.
+  (d) 4 pts — Naive recursion re-solves overlapping subproblems and costs
+      O(2^n); DP memoises them, and the answer should note that O(nW) is
+      pseudo-polynomial because W is a numeric value, not an input length.
