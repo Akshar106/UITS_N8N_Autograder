@@ -1,0 +1,33 @@
+{
+  "assignment_name": "Data Structures and Algorithms - Assignment 4: Campus Bike-Share",
+  "canvas_rubric_file": "sample_data/assignments/dsa_bikeshare/canvas_rubric.json",
+  "answer_key_file": "sample_data/assignments/dsa_bikeshare/assignment.txt",
+  "total_points": 100,
+  "label_source": "constructed",
+  "label_note": "ONE SUBMISSION ONLY, AND IT IS THE REFERENCE SOLUTION. This is a smoke test, not a measurement: it answers 'does a complete, correct paper come back at or near 100?', which detects the grader being too harsh and nothing else. It cannot detect inflation, which is the failure mode this project actually has. Do not quote a good result here as evidence the grader works.\n\nThe submission is solutions.txt rather than the solutions PDF, deliberately. Extracting a PDF flattens leading whitespace, so Python code read back out of one is unindented and a grader would be judging code that does not parse. That is a real limitation of PDF submissions for code, not something to hide inside a fixture.\n\nNote also that the answer_key_file here is the ASSIGNMENT, not an answer key -- this course grades from the rubric alone, so what the grader gets is the questions plus the rubric's criteria, which is exactly the situation the rubric was written to support. To make this set measure something, add real student submissions with per-question verdicts against rubric_parts.",
+  "rubric_parts": {
+    "Q1": 12,
+    "Q2": 14,
+    "Q3": 18,
+    "Q4": 20,
+    "Q5": 12,
+    "Q6": 12,
+    "Q7": 12
+  },
+  "submissions": [
+    {
+      "file": "sample_data/assignments/dsa_bikeshare/solutions.txt",
+      "note": "the reference solution; every criterion satisfied by construction",
+      "satisfies": {
+        "Q1": 1,
+        "Q2": 1,
+        "Q3": 1,
+        "Q4": 1,
+        "Q5": 1,
+        "Q6": 1,
+        "Q7": 1
+      }
+    }
+  ],
+  "probes": []
+}

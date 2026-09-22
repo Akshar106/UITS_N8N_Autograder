@@ -85,6 +85,7 @@ Everything under `scripts/` runs from the repository root.
 | `test_grading.py` | LLM key | Grades the bundled sample submissions and writes an `.xlsx`, so you can eyeball real output without Canvas. |
 | `probe_vision.py` | LLM key | Answers "can the configured model see images?" — sends a generated image containing a random code and checks whether the model reads it back. A yes/no fact, not an opinion. |
 | `check_labels.py` | nothing | Validates a label set: sub-parts sum to the total, every submission has a verdict on every part, referenced files exist and extract, and the score distribution is not all extremes. |
+| `make_dsa_pdfs.py` | `reportlab` | Renders the Bike-Share DSA assignment, reference solutions and rubric from their source text into PDFs. The text files are the source of truth; re-run this after editing them. |
 | `make_eda_variants.py` | nothing | Derives the degraded Forecast/EDA notebooks (steps never run, a step that raises, steps absent) from the complete submission, so each variant differs from full marks in exactly one way. |
 | `eval_grading.py` | LLM key | **Measures** the grader: mean error against known scores, run-to-run spread, and bias probes for writing fluency and answer length. |
 
@@ -97,18 +98,21 @@ python3 scripts/eval_grading.py --repeats 3  # also check the score is reproduci
 python3 scripts/eval_grading.py --passes 2   # grade twice and merge, as the app does
 ```
 
-Four label sets ship with the repo:
+Five label sets ship with the repo:
 
 ```bash
 python3 scripts/eval_grading.py                                                     # short DSA prose set
 python3 scripts/eval_grading.py --labels sample_data/assignments/dsa_midterm/labels.json
 python3 scripts/eval_grading.py --labels sample_data/assignments/ml_pipeline/labels.json
 python3 scripts/eval_grading.py --labels sample_data/assignments/forecast_eda/labels.json
+python3 scripts/eval_grading.py --labels sample_data/assignments/dsa_bikeshare/labels.json
 ```
 
 `forecast_eda` is a **real IU course assignment**: a Jupyter notebook graded against a nine-criterion Canvas rubric where every criterion is Full Marks / No Marks and the requirement lives in the hidden longer description. It is the only fixture that exercises notebook reading, the Canvas rubric payload and the all-or-nothing scale together, and its label set is built from a real submission plus four variants derived from it mechanically (`scripts/make_eda_variants.py`). Two of them isolate the judgment a notebook grader has to make and a document grader never does — whether code that was written but never run counts as the step being done (the labels say it does not, and say why, because that call is arguable). The other two are the *same* damage, one misspelled call and one traceback, with opposite correct answers: a crash in the heatmap call means no heatmap and costs the step, while a crash in `drop_duplicates` on a dataset with no duplicates costs nothing, because that criterion only requires removal *if* duplicates are found. A grader that deducts on the second is reacting to the traceback instead of reading the criterion. That pair exists because the first version of this label set got it wrong — it scored the harmless crash as a 2-point loss, the grader disagreed, and the grader was right.
 
-The two under `sample_data/assignments/` with 100-point totals are full papers — a data
+`dsa_bikeshare` is a full 100-point data structures assignment — theory, code, complexity derivations, a debugging question and an open design analysis — written for a course that grades **from the rubric with no answer key**, which is how this actually works in practice. It ships as three PDFs (questions, reference solutions, rubric) rendered from the text files beside them, plus a Canvas-ready rubric payload with seven graded criteria. Its label set is a **smoke test only**: one submission, the reference solution, expected at 100. That detects the grader being too harsh and nothing else, so do not read a good result there as evidence of accuracy. One thing it did surface: extracting a PDF flattens leading whitespace, so Python submitted as a PDF comes back unindented and is not reliably gradable as code — submit notebooks or scripts for code.
+
+The two other sets under `sample_data/assignments/` with 100-point totals are full papers — a data
 structures midterm with pseudocode and complexity analysis, and an end-to-end ML
 pipeline mixing prose with Python. Their labels are **constructed, not
 estimated**: each rubric question is split into weighted sub-parts, every
