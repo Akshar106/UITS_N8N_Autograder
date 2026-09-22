@@ -1,0 +1,77 @@
+<h2>Data Structures and Algorithms — Assignment 4</h2>
+<h3>Campus Bike-Share: Data Structures End to End</h3>
+<p><strong>Total: 100 points</strong></p>
+<h4>Scenario</h4>
+<p>The university is launching a campus bike-share. The system tracks <strong>40,000 bikes</strong> across <strong>220 docking stations</strong>. Each bike has a unique integer <code>bikeID</code>. Each station has an <code>(x, y)</code> position in metres on a campus grid and a walking-distance graph connecting it to nearby stations.</p>
+<p>Every question below is about the structures and algorithms behind that system. You are not building the product; you are making and defending the engineering choices inside it.</p>
+<h4>What to submit</h4>
+<p>One notebook (<code>.ipynb</code>) or script (<code>.py</code>) containing your code, together with your written answers. Written answers may go in markdown cells or in a separate PDF — but every question must be answered somewhere, clearly labelled.</p>
+<ul><li>Code is graded on <strong>whether it works and whether it meets the stated complexity</strong>, not on style, naming or formatting.</li><li>Where a question asks you to justify, derive or compare, <strong>the reasoning is what earns the marks</strong>. Several answers are defensible; an unsupported assertion is not one of them.</li><li>If you use an external source, cite it.</li></ul>
+<hr>
+<h3>Q1. Choosing the right structure (12 points)</h3>
+<p>The system needs three operations on its 40,000 bikes:</p>
+<ul><li><code>lookup(bikeID)</code> — called on every dock and undock, thousands of times an hour.</li><li><code>insert(bikeID)</code> / <code>remove(bikeID)</code> — a bike enters or leaves service, a few times a day.</li><li><code>report()</code> — list every bike in ascending <code>bikeID</code> order, once nightly.</li></ul>
+<p><strong>(a) [5 pts]</strong> Choose one data structure for this workload and justify the choice against the <em>access pattern</em>, not in the abstract.</p>
+<p><strong>(b) [4 pts]</strong> The nightly report becomes an <strong>hourly</strong> report. Does your answer change? Argue either way, but argue from the cost of the operations.</p>
+<p><strong>(c) [3 pts]</strong> State the average-case time complexity of all four operations under your chosen structure.</p>
+<hr>
+<h3>Q2. Hashing (14 points)</h3>
+<p><strong>(a) [4 pts]</strong> Explain the difference between <strong>separate chaining</strong> and <strong>open addressing</strong>, and give one concrete advantage of each over the other.</p>
+<p><strong>(b) [3 pts]</strong> A hash table has 16 slots and holds 12 entries. State the load factor α. Explain what happens to the expected probe length under <strong>linear probing</strong> as α approaches 1, and why.</p>
+<p><strong>(c) [3 pts]</strong> Why is deletion harder under open addressing than under separate chaining? Describe the standard fix and what it costs.</p>
+<p><strong>(d) [4 pts]</strong> A table has 7 slots, indices 0–6, and uses <code>h(k) = k mod 7</code> with <strong>linear probing</strong>. Insert the following keys <strong>in this order</strong>:</p>
+<pre><code>15, 11, 27, 8, 22</code></pre>
+<p>Show the final contents of the table, slot by slot. Show your probing for any key that collides.</p>
+<hr>
+<h3>Q3. The k nearest stations (18 points)</h3>
+<p>A rider at position <code>(ux, uy)</code> asks for the <code>k</code> nearest stations.</p>
+<p><strong>(a) [10 pts]</strong> Implement:</p>
+<pre><code>def k_closest_stations(stations, user, k):
+    &quot;&quot;&quot;stations: list of objects with .id, .x, .y
+       user:     tuple (ux, uy)
+       k:        how many to return
+       returns:  list of station ids, nearest first&quot;&quot;&quot;</code></pre>
+<p>Your solution must run in <strong>O(n log k)</strong> time, where <code>n = len(stations)</code>. Handle <code>k &amp;lt;= 0</code> and <code>k &amp;gt; n</code> sensibly.</p>
+<p><strong>(b) [4 pts]</strong> Justify the complexity of your implementation. Say where each factor comes from.</p>
+<p><strong>(c) [4 pts]</strong> For <code>n = 40,000</code> and <code>k = 5</code>, explain why a bounded heap beats sorting the whole list, and identify the value of <code>k</code> at which that advantage disappears.</p>
+<hr>
+<h3>Q4. Shortest walking route (20 points)</h3>
+<p>Stations form a weighted undirected graph; edge weights are walking times in seconds.</p>
+<p><strong>(a) [10 pts]</strong> Implement Dijkstra's algorithm:</p>
+<pre><code>def shortest_route(graph, source, target):
+    &quot;&quot;&quot;graph:  dict mapping station id -&gt; list of (neighbour_id, weight)
+       returns: (total_seconds, [source, ..., target]) or (inf, []) if
+                unreachable&quot;&quot;&quot;</code></pre>
+<p>You must return the <strong>path</strong>, not only the distance.</p>
+<p><strong>(b) [6 pts]</strong> Derive the time complexity of your implementation using a binary heap. Show where each term comes from in terms of <code>V</code> and <code>E</code> — do not simply state the final result.</p>
+<p><strong>(c) [4 pts]</strong> Dijkstra's algorithm is not correct on graphs with negative edge weights. Give a <strong>concrete counterexample with three nodes</strong>: list the edges and weights, state what Dijkstra returns, state the true shortest distance, and explain in one sentence which assumption the algorithm violated.</p>
+<hr>
+<h3>Q5. Amortized analysis (12 points)</h3>
+<p>The bike log is a dynamic array that starts with capacity 1 and <strong>doubles</strong> whenever it is full, copying all existing elements into the new allocation.</p>
+<p><strong>(a) [6 pts]</strong> Using the <strong>aggregate method</strong>, show that <code>append</code> costs amortized O(1). Show the total copy cost across <code>n</code> appends as a sum, and evaluate it.</p>
+<p><strong>(b) [6 pts]</strong> A colleague proposes growing by a <strong>fixed +10 slots</strong> instead of doubling, arguing it "wastes less memory." Derive the total copy cost across <code>n</code> appends under this scheme, state the resulting amortized cost per append, and say whether the proposal is a good trade.</p>
+<hr>
+<h3>Q6. Debugging (12 points)</h3>
+<p>The following function is supposed to find <code>target</code> in an ascending, duplicate-free list of station ids and return its index, or <code>-1</code> if absent. It is <strong>wrong in two distinct ways</strong>.</p>
+<pre><code>def find_station(sorted_ids, target):
+    lo, hi = 0, len(sorted_ids)
+    while lo &lt;= hi:
+        mid = (lo + hi) // 2
+        if sorted_ids[mid] == target:
+            return mid
+        elif sorted_ids[mid] &lt; target:
+            lo = mid
+        else:
+            hi = mid - 1
+    return -1</code></pre>
+<p><strong>(a) [6 pts]</strong> Identify <strong>both</strong> faults. For each, name the line and explain what goes wrong.</p>
+<p><strong>(b) [4 pts]</strong> One of the two faults <strong>cannot be observed while the other is present</strong> — no input will ever expose it. Say which fault is hidden and why, give a concrete input (the list and the target) that demonstrates the failure you <em>can</em> observe, and give the input that would expose the hidden fault once the first one is repaired.</p>
+<p><strong>(c) [2 pts]</strong> Give the corrected function.</p>
+<hr>
+<h3>Q7. Designing a spatial query (12 points)</h3>
+<p>The system must answer: <strong>"which bikes are within 2 km of this point?"</strong> — up to 500 times a second, over 40,000 bikes whose positions change constantly.</p>
+<p>Compare <strong>two</strong> approaches. One must be the naive linear scan; the second is yours to choose (a uniform grid, a quadtree, a k-d tree, geohashing, or another structure you can defend).</p>
+<p>For each approach address:</p>
+<ul><li>query time complexity, and what it depends on;</li><li>the cost of a bike <strong>moving</strong> (position updates are constant);</li><li>memory overhead.</li></ul>
+<p>Then <strong>recommend one</strong> and justify the recommendation against this specific workload — 500 queries/second, 40,000 moving objects, a 2 km radius on a campus roughly 5 km across.</p>
+<p>There is no single correct recommendation. A well-argued case for either approach earns full credit; an unsupported preference does not.</p>
