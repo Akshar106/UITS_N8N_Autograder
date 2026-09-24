@@ -85,7 +85,8 @@ Everything under `scripts/` runs from the repository root.
 | `test_grading.py` | LLM key | Grades the bundled sample submissions and writes an `.xlsx`, so you can eyeball real output without Canvas. |
 | `probe_vision.py` | LLM key | Answers "can the configured model see images?" — sends a generated image containing a random code and checks whether the model reads it back. A yes/no fact, not an opinion. |
 | `check_labels.py` | nothing | Validates a label set: sub-parts sum to the total, every submission has a verdict on every part, referenced files exist and extract, and the score distribution is not all extremes. |
-| `make_dsa_pdfs.py` | `reportlab` | Renders the Bike-Share DSA assignment, reference solutions and rubric from their source text into PDFs. The text files are the source of truth; re-run this after editing them. |
+| `make_pdfs.py` | `reportlab` | Renders any assignment source text into a PDF (`make_pdfs.py path/to/rubric.txt`), or the whole Bike-Share set with no arguments. The text files are the source of truth; re-run after editing them. |
+| `make_canvas_text.py` | nothing | Converts an assignment source file into the two forms Canvas accepts: plain text for the editor, and semantic HTML for its HTML view, which is the only way code blocks keep their indentation. |
 | `make_eda_variants.py` | nothing | Derives the degraded Forecast/EDA notebooks (steps never run, a step that raises, steps absent) from the complete submission, so each variant differs from full marks in exactly one way. |
 | `eval_grading.py` | LLM key | **Measures** the grader: mean error against known scores, run-to-run spread, and bias probes for writing fluency and answer length. |
 

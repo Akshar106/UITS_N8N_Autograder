@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Render the Bike-Share assignment, solutions and rubric as PDFs.
+"""Render an assignment's source text as a PDF.
 
     pip install reportlab
-    python3 scripts/make_dsa_pdfs.py
+    python3 scripts/make_pdfs.py                       # the Bike-Share set
+    python3 scripts/make_pdfs.py path/to/rubric.txt    # any source file
 
 The text files beside the PDFs are the source of truth -- edit those and re-run
 this. Keeping the prose in plain text rather than only in a binary means the
@@ -31,7 +32,7 @@ except ImportError:
     sys.exit("reportlab is not installed. Run: pip install reportlab")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SOURCE_DIR = REPO_ROOT / "sample_data/assignments/dsa_bikeshare"
+ASSIGNMENTS = REPO_ROOT / "sample_data/assignments"
 
 INK = colors.HexColor("#1a1a1a")
 MUTED = colors.HexColor("#5a5a5a")
@@ -257,22 +258,40 @@ def build(source, target, label):
           f"{doc.page} pages)")
 
 
+DEFAULTS = [
+    ("dsa_bikeshare/assignment.txt", "DSA_Assignment4_Questions.pdf",
+     "Assignment 4 — Campus Bike-Share"),
+    ("dsa_bikeshare/solutions.txt", "DSA_Assignment4_Reference_Solutions.pdf",
+     "Assignment 4 — Reference Solutions"),
+    ("dsa_bikeshare/rubric.txt", "DSA_Assignment4_Rubric.pdf",
+     "Assignment 4 — Grading Rubric"),
+]
+
+
+def title_of(source):
+    """The document's own '# ' heading, which is what belongs in the footer."""
+    for line in source.read_text().split("\n"):
+        if line.startswith("# "):
+            return line[2:].strip()
+    return source.stem.replace("_", " ").title()
+
+
 def main():
-    jobs = [
-        ("assignment.txt", "DSA_Assignment4_Questions.pdf",
-         "Assignment 4 — Campus Bike-Share"),
-        ("solutions.txt", "DSA_Assignment4_Reference_Solutions.pdf",
-         "Assignment 4 — Reference Solutions"),
-        ("rubric.txt", "DSA_Assignment4_Rubric.pdf",
-         "Assignment 4 — Grading Rubric"),
-    ]
-    print(f"Rendering into {SOURCE_DIR.relative_to(REPO_ROOT)}")
-    for source_name, target_name, label in jobs:
-        source = SOURCE_DIR / source_name
+    if len(sys.argv) > 1:
+        jobs = []
+        for argument in sys.argv[1:]:
+            source = Path(argument)
+            source = source if source.is_absolute() else REPO_ROOT / source
+            jobs.append((source, source.with_suffix(".pdf"), title_of(source)))
+    else:
+        jobs = [(ASSIGNMENTS / name, ASSIGNMENTS / Path(name).parent / target, label)
+                for name, target, label in DEFAULTS]
+
+    for source, target, label in jobs:
         if not source.exists():
-            print(f"  missing {source_name}", file=sys.stderr)
+            print(f"  missing {source}", file=sys.stderr)
             return 1
-        build(source, SOURCE_DIR / target_name, label)
+        build(source, target, label)
     return 0
 
 
