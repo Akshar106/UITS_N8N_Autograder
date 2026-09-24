@@ -82,62 +82,40 @@ Everything under `scripts/` runs from the repository root.
 | `test_extraction.py` | nothing (plus `reportlab` for the PDF checks) | Builds real .docx/.pdf/.txt/.ipynb files and confirms each is read *completely* — tables, text boxes, equations, hyperlinks, encodings — or reported as incomplete rather than graded. |
 | `test_grading_guards.py` | nothing | The guards between a model's output and a student's grade: arithmetic recomputed from the breakdown, impossible scores rejected, rubric coverage enforced, retries on malformed responses and flaky API calls, reproducible request settings. |
 | `test_review_integrity.py` | nothing | An approved grade always describes the work it is attached to: approvals expire when a student resubmits or the rubric changes, faculty edits are never destroyed, owner scoping holds, and an older database upgrades in place. |
-| `test_grading.py` | LLM key | Grades the bundled sample submissions and writes an `.xlsx`, so you can eyeball real output without Canvas. |
+| `test_grading.py` | LLM key | Grades a rubric and a folder of submissions you point it at, and writes an `.xlsx`, so you can eyeball real output without Canvas. |
 | `probe_vision.py` | LLM key | Answers "can the configured model see images?" — sends a generated image containing a random code and checks whether the model reads it back. A yes/no fact, not an opinion. |
-| `check_labels.py` | nothing | Validates a label set: sub-parts sum to the total, every submission has a verdict on every part, referenced files exist and extract, and the score distribution is not all extremes. |
-| `make_pdfs.py` | `reportlab` | Renders any assignment source text into a PDF (`make_pdfs.py path/to/rubric.txt`), or the whole Bike-Share set with no arguments. The text files are the source of truth; re-run after editing them. |
+| `check_labels.py` | nothing | Validates a label set you supply: sub-parts sum to the total, every submission has a verdict on every part, referenced files exist and extract, and the score distribution is not all extremes. |
+| `make_pdfs.py` | `reportlab` | Renders an assignment source text into a PDF (`make_pdfs.py path/to/rubric.txt`). The text files are the source of truth; re-run after editing them. |
 | `make_canvas_text.py` | nothing | Converts an assignment source file into the two forms Canvas accepts: plain text for the editor, and semantic HTML for its HTML view, which is the only way code blocks keep their indentation. |
-| `make_eda_variants.py` | nothing | Derives the degraded Forecast/EDA notebooks (steps never run, a step that raises, steps absent) from the complete submission, so each variant differs from full marks in exactly one way. |
 | `eval_grading.py` | LLM key | **Measures** the grader: mean error against known scores, run-to-run spread, and bias probes for writing fluency and answer length. |
 
 `eval_grading.py` is the only thing here that answers "how accurate is the
 grading?", so run it before and after any change to the prompt or the model:
 
 ```bash
-python3 scripts/eval_grading.py              # accuracy + bias probes
-python3 scripts/eval_grading.py --repeats 3  # also check the score is reproducible
-python3 scripts/eval_grading.py --passes 2   # grade twice and merge, as the app does
+python3 scripts/check_labels.py my_labels.json                       # validate first
+python3 scripts/eval_grading.py --labels my_labels.json
+python3 scripts/eval_grading.py --labels my_labels.json --repeats 3  # run-to-run spread
+python3 scripts/eval_grading.py --labels my_labels.json --passes 2   # as the app grades
 ```
 
-Five label sets ship with the repo:
+**No label sets ship with the repository.** A corpus of sample assignments and
+graded submissions was built and then removed once it had served its purpose; it
+is recoverable from this branch's git history if it is ever wanted again. What
+that means in practice is that **the grader's accuracy is currently unmeasured**,
+and no change to the prompt can be shown to help or hurt until a label set
+exists. The guard suites below still pass without one, but they check that the
+app cannot produce an impossible grade -- not that the grades are any good.
 
-```bash
-python3 scripts/eval_grading.py                                                     # short DSA prose set
-python3 scripts/eval_grading.py --labels sample_data/assignments/dsa_midterm/labels.json
-python3 scripts/eval_grading.py --labels sample_data/assignments/ml_pipeline/labels.json
-python3 scripts/eval_grading.py --labels sample_data/assignments/forecast_eda/labels.json
-python3 scripts/eval_grading.py --labels sample_data/assignments/dsa_bikeshare/labels.json
-```
-
-`forecast_eda` is a **real IU course assignment**: a Jupyter notebook graded against a nine-criterion Canvas rubric where every criterion is Full Marks / No Marks and the requirement lives in the hidden longer description. It is the only fixture that exercises notebook reading, the Canvas rubric payload and the all-or-nothing scale together, and its label set is built from a real submission plus four variants derived from it mechanically (`scripts/make_eda_variants.py`). Two of them isolate the judgment a notebook grader has to make and a document grader never does — whether code that was written but never run counts as the step being done (the labels say it does not, and say why, because that call is arguable). The other two are the *same* damage, one misspelled call and one traceback, with opposite correct answers: a crash in the heatmap call means no heatmap and costs the step, while a crash in `drop_duplicates` on a dataset with no duplicates costs nothing, because that criterion only requires removal *if* duplicates are found. A grader that deducts on the second is reacting to the traceback instead of reading the criterion. That pair exists because the first version of this label set got it wrong — it scored the harmless crash as a 2-point loss, the grader disagreed, and the grader was right.
-
-`dsa_bikeshare` is a full 100-point data structures assignment — theory, code, complexity derivations, a debugging question and an open design analysis — written for a course that grades **from the rubric with no answer key**, which is how this actually works in practice. It ships as three PDFs (questions, reference solutions, rubric) rendered from the text files beside them, plus a Canvas-ready rubric payload with seven graded criteria. Its label set is a **smoke test only**: one submission, the reference solution, expected at 100. That detects the grader being too harsh and nothing else, so do not read a good result there as evidence of accuracy. One thing it did surface: extracting a PDF flattens leading whitespace, so Python submitted as a PDF comes back unindented and is not reliably gradable as code — submit notebooks or scripts for code.
-
-The two other sets under `sample_data/assignments/` with 100-point totals are full papers — a data
-structures midterm with pseudocode and complexity analysis, and an end-to-end ML
-pipeline mixing prose with Python. Their labels are **constructed, not
-estimated**: each rubric question is split into weighted sub-parts, every
-submission was written against a spec saying which sub-parts it satisfies (1,
-0.5 or 0), and the expected score is the weighted sum. A disagreement is then
-traceable to a specific requirement instead of to a number somebody guessed.
-`labels_sparse.json` grades the *same* ML submissions against a rubric giving only
-the questions and their marks — no criteria at all — with the same expected
-scores, because the work has not changed, only the help the grader was given.
-Comparing the two runs is how you find out whether the grader can judge
-correctness on its own or is merely checking answers against supplied criteria.
-
-Two submissions exist purely to catch known failure modes — one whose prose
-describes data leakage perfectly while its own code commits it, and one that is
-fully correct by an unconventional route and should score the same as the model
-answer.
-
-The older labels in `sample_data/eval/labels.json` are **estimates, not TA
-grades** — enough to catch a regression, not evidence of accuracy. To claim a
-real accuracy figure, label submissions from a completed assignment with the
-scores a TA actually gave, ideally with two TAs grading independently so you
-also learn what human-to-human agreement looks like. That agreement rate is the
-realistic ceiling; two experienced TAs do not agree with each other 100% of the
-time either.
+To measure it, write a label set against real submissions. `check_labels.py`
+documents and enforces the format: each rubric question is split into weighted
+sub-parts, each submission carries a verdict on every sub-part (1, 0.5 or 0), and
+the expected score is the weighted sum -- so a disagreement is traceable to a
+specific requirement rather than to a number somebody guessed. Labels written
+from the scores a TA actually gave are worth far more than estimates, and two TAs
+grading independently also tells you what human-to-human agreement looks like.
+That agreement rate is the realistic ceiling; two experienced TAs do not agree
+with each other 100% of the time either.
 
 ### How it works
 

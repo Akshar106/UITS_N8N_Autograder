@@ -2,8 +2,7 @@
 """Render an assignment's source text as a PDF.
 
     pip install reportlab
-    python3 scripts/make_pdfs.py                       # the Bike-Share set
-    python3 scripts/make_pdfs.py path/to/rubric.txt    # any source file
+    python3 scripts/make_pdfs.py path/to/assignment.txt [path/to/rubric.txt ...]
 
 The text files beside the PDFs are the source of truth -- edit those and re-run
 this. Keeping the prose in plain text rather than only in a binary means the
@@ -32,7 +31,6 @@ except ImportError:
     sys.exit("reportlab is not installed. Run: pip install reportlab")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ASSIGNMENTS = REPO_ROOT / "sample_data/assignments"
 
 INK = colors.HexColor("#1a1a1a")
 MUTED = colors.HexColor("#5a5a5a")
@@ -258,16 +256,6 @@ def build(source, target, label):
           f"{doc.page} pages)")
 
 
-DEFAULTS = [
-    ("dsa_bikeshare/assignment.txt", "DSA_Assignment4_Questions.pdf",
-     "Assignment 4 — Campus Bike-Share"),
-    ("dsa_bikeshare/solutions.txt", "DSA_Assignment4_Reference_Solutions.pdf",
-     "Assignment 4 — Reference Solutions"),
-    ("dsa_bikeshare/rubric.txt", "DSA_Assignment4_Rubric.pdf",
-     "Assignment 4 — Grading Rubric"),
-]
-
-
 def title_of(source):
     """The document's own '# ' heading, which is what belongs in the footer."""
     for line in source.read_text().split("\n"):
@@ -277,15 +265,14 @@ def title_of(source):
 
 
 def main():
-    if len(sys.argv) > 1:
-        jobs = []
-        for argument in sys.argv[1:]:
-            source = Path(argument)
-            source = source if source.is_absolute() else REPO_ROOT / source
-            jobs.append((source, source.with_suffix(".pdf"), title_of(source)))
-    else:
-        jobs = [(ASSIGNMENTS / name, ASSIGNMENTS / Path(name).parent / target, label)
-                for name, target, label in DEFAULTS]
+    if len(sys.argv) < 2:
+        print("usage: make_pdfs.py path/to/source.txt [...]", file=sys.stderr)
+        return 2
+    jobs = []
+    for argument in sys.argv[1:]:
+        source = Path(argument)
+        source = source if source.is_absolute() else REPO_ROOT / source
+        jobs.append((source, source.with_suffix(".pdf"), title_of(source)))
 
     for source, target, label in jobs:
         if not source.exists():

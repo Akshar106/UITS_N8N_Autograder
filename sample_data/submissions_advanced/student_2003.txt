@@ -1,9 +1,0 @@
-Q1: A binary search tree is a great data structure. It's O(log n) because it's balanced and efficient and uses divide and conquer.
-
-Q2: Recursion is elegant and uses the call stack. Iteration is efficient. Big-O matters here.
-
-Q3: Big-O notation is very important in computer science. It helps us understand efficiency and scalability of algorithms.
-
-Q4: Arrays are fast and linked lists are flexible and dynamic. Both are fundamental data structures used everywhere in software engineering.
-
-Q5: Hash tables are very efficient and use hashing functions. Collisions are handled using various techniques and data structures like linked lists.

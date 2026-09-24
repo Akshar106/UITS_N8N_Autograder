@@ -1,9 +1,0 @@
-Q1: Worst case is linear once the tree collapses into a chain, since every node then has a single child and you walk the whole thing. Typical case is logarithmic because each comparison throws away half the remaining candidates. The invariant is that everything hanging off a node's left side is less than it and everything off its right side is greater.
-
-Q2: Computing Fibonacci by naive recursion costs exponential time -- the call tree doubles at each level because fib(n-1) and fib(n-2) redo overlapping work -- and the stack grows linearly with n. Rewriting it as a bottom-up loop that carries only the previous two values makes it linear in time and constant in space. Caching subresults, or filling a DP table, gets the recursive form down to linear time too.
-
-Q3: It is an asymptotic upper bound on how cost grows with input size. Its value is that it strips away machine speed and constant factors, so two algorithms can be compared on their scaling alone rather than on whose laptop ran the benchmark. Heapsort is a standard example that runs in n log n.
-
-Q4: Arrays sit in one contiguous block, so indexing is constant time and the prefetcher works well; growing one past its capacity means allocating a bigger block and copying, which is linear. A linked list splices a node in or out in constant time once you hold a reference to the right place, but reaching position k means following k pointers, and every node pays the memory overhead of storing those pointers.
-
-Q5: Two distinct keys can land on the same slot. One remedy is to hang a bucket off each slot holding every key that maps there. The other keeps everything in the table itself and walks forward to the next free slot on a fixed schedule -- step by one, step by squares, or step by a second hash. Buckets cope better as the table fills up, whereas staying in the array is friendlier to the cache but makes removal awkward, since you cannot simply blank a slot without breaking later probes.

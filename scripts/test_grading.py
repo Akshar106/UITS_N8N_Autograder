@@ -4,8 +4,8 @@
 Usage:
     python3 scripts/test_grading.py <rubric_file> <submission_file_or_dir> [assignment_name]
 
-Example (using the bundled sample data):
-    python3 scripts/test_grading.py sample_data/rubric.txt sample_data/submissions
+Example:
+    python3 scripts/test_grading.py my_rubric.txt my_submissions/
 
 Each submission's filename (minus extension) is used as the student id.
 Writes test_grades_output.xlsx in the current directory so you can see the

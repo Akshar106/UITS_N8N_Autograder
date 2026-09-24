@@ -1,9 +1,0 @@
-Q1: A REST API is a way for two systems to communicate over HTTP using standard verbs like GET, POST, PUT, and DELETE. Each resource is identified by a URL.
-
-Q2: HTTP status codes tell you the result of a request. 200 means success, 404 means not found, 500 means server error, and 401 means unauthorized.
-
-Q3: JSON is a lightweight data format commonly used for APIs because it's easy for both humans and machines to read.
-
-Q4: Authentication can be done with API keys, OAuth2 tokens, or session cookies depending on the use case.
-
-Q5: Rate limiting protects an API from being overwhelmed by too many requests in a short period of time.

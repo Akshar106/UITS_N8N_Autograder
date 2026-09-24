@@ -6,6 +6,8 @@ extractor the grading job uses. No network, no API key:
 
     python3 scripts/test_extraction.py
 
+Every fixture is built in memory, so this needs no files on disk.
+
 The case that motivates all of this: a student who answers inside a Word table
 used to extract as their name alone, get graded, and score zero with a confident
 justification. Nothing anywhere said extraction had failed. Every check here
@@ -448,41 +450,7 @@ def test_text_entry():
     check("None is handled", extract.strip_html(None) == "")
 
 
-def test_rubric_files_still_read():
-    print("\n-- the bundled sample data still reads --")
-    root = Path(__file__).resolve().parent.parent
-    for relative in ("sample_data/rubric_advanced.txt",
-                     "sample_data/submissions_advanced/student_2001.txt"):
-        path = root / relative
-        result = read(path.name, path.read_bytes())
-        check(f"{relative} reads", result.chars > 100 and not result.looks_incomplete)
-
-
-def test_length_probe_is_a_minimal_pair():
-    """The padded probe must add words without removing any.
-
-    An earlier version quietly dropped content, so its score drop was partly
-    correct grading rather than length bias -- a probe that cannot distinguish
-    the two measures nothing.
-    """
-    import re
-
-    print("\n-- the length probe is a true minimal pair --")
-    root = Path(__file__).resolve().parent.parent
-    base = (root / "sample_data/submissions_advanced/student_2003.txt").read_text().strip()
-    variant = (root / "sample_data/eval/probe_2003_padded.txt").read_text()
-
-    lost = [s.strip() for s in re.split(r"(?<=\.)\s+", base)
-            if s.strip() and s.strip() not in variant]
-    check("every sentence of the baseline survives verbatim in the padded variant", not lost)
-    if lost:
-        print(f"        lost: {lost[:2]}")
-    check("the padded variant really is longer",
-          len(variant.split()) > 2 * len(base.split()))
-
-
 def main():
-    test_length_probe_is_a_minimal_pair()
     test_docx_tables()
     test_docx_reading_order()
     test_docx_other_containers()
@@ -493,7 +461,6 @@ def main():
     test_notebook()
     test_refusals()
     test_text_entry()
-    test_rubric_files_still_read()
 
     print()
     if FAILS:

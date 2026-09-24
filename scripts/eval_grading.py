@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Measure the grader: accuracy against known scores, consistency, and bias.
 
-    python3 scripts/eval_grading.py                          # accuracy + probes
-    python3 scripts/eval_grading.py --repeats 3              # also measure run-to-run spread
-    python3 scripts/eval_grading.py --labels my_labels.json  # against real TA grades
-    python3 scripts/eval_grading.py --out report.json        # machine-readable results
+    python3 scripts/eval_grading.py --labels my_labels.json
+    python3 scripts/eval_grading.py --labels my_labels.json --repeats 3   # run-to-run spread
+    python3 scripts/eval_grading.py --labels my_labels.json --out out.json
+
+No label sets ship with the repository. Point --labels at one you have written
+against real submissions -- see check_labels.py for the format it must satisfy.
 
 Needs REALLM_API_KEY / REALLM_URL / REALLM_MODEL_NAME in .env, because it calls
 the real model -- that is the point.
@@ -312,7 +314,8 @@ def print_report(spec, rows, probes, summary, repeats):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--labels", default="sample_data/eval/labels.json")
+    parser.add_argument("--labels", required=True,
+                        help="a label set: expected scores for submissions you supply")
     parser.add_argument("--repeats", type=int, default=1,
                         help="grade each submission N times to measure run-to-run spread")
     parser.add_argument("--out", help="write the full results as JSON")

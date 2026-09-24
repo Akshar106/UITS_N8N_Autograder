@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Validate an evaluation label set without calling the model.
 
-    python3 scripts/check_labels.py                    # every labels.json found
     python3 scripts/check_labels.py path/to/labels.json
 
 Confirms the rubric sub-parts sum to the stated total, every submission has a
@@ -102,8 +101,10 @@ def check_one(path):
 
 
 def main():
-    targets = ([Path(a) for a in sys.argv[1:]]
-               or sorted(ROOT.glob("sample_data/**/labels*.json")))
+    targets = [Path(a) for a in sys.argv[1:]]
+    if not targets:
+        print("usage: check_labels.py path/to/labels.json [...]", file=sys.stderr)
+        return 2
     problems = []
     for target in targets:
         problems += check_one(target if target.is_absolute() else ROOT / target)

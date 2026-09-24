@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert an assignment's source text into forms Canvas accepts.
 
-    python3 scripts/make_canvas_text.py [source.txt ...]
+    python3 scripts/make_canvas_text.py source.txt [...]
 
 Canvas's editor does not understand Markdown. Pasting the source file straight
 in prints the asterisks and hashes literally, so this writes two siblings of
@@ -10,8 +10,6 @@ each source file:
   *_canvas.txt   plain text with the markup resolved -- paste into the editor
   *_canvas.html  semantic HTML -- paste into the editor's HTML view, which is
                  the only way code blocks keep their indentation and monospace
-
-Defaults to the Bike-Share assignment when given no arguments.
 """
 import html
 import re
@@ -19,7 +17,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT = REPO_ROOT / "sample_data/assignments/dsa_bikeshare/assignment.txt"
 
 _BOLD = re.compile(r"\*\*(.+?)\*\*", re.S)
 _ITALIC = re.compile(r"(?<![\*\w])\*(?!\s)(.+?)(?<!\s)\*(?!\*)", re.S)
@@ -161,7 +158,10 @@ def to_html(source):
 
 
 def main():
-    sources = [Path(a) for a in sys.argv[1:]] or [DEFAULT]
+    sources = [Path(a) for a in sys.argv[1:]]
+    if not sources:
+        print("usage: make_canvas_text.py source.txt [...]", file=sys.stderr)
+        return 2
     for source in sources:
         source = source if source.is_absolute() else REPO_ROOT / source
         if not source.exists():
