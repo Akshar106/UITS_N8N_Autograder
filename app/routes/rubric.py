@@ -4,7 +4,8 @@ import threading
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
 from app import canvas_client, canvas_rubric, extract, grading, storage
-from app.auth_utils import canvas_required, current_user_id, get_valid_access_token
+from app.auth_utils import (access_token_for, canvas_required, current_user_id,
+                            get_valid_access_token)
 
 rubric_bp = Blueprint("rubric", __name__)
 
@@ -189,6 +190,14 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                 # echoed-back student_id, which could be hallucinated or transposed.
                 student_id = str(submission["user_id"])
                 student_name = user.get("name", f"Student {student_id}")
+
+                # Re-read the token each time rather than reusing the one this
+                # job started with: a full roster can outlast a Canvas token, and
+                # a stale one turns every remaining download into a failure.
+                try:
+                    access_token = access_token_for(iu_user_id)
+                except Exception as exc:  # noqa: BLE001 -- reported on the row, not raised
+                    current_app.logger.warning("Canvas token unavailable mid-run: %s", exc)
 
                 student_text, submission_filename, extraction_error, extraction_notes = \
                     _extract_submission_text(submission, access_token)

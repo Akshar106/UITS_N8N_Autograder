@@ -128,6 +128,108 @@ def test_review_lifecycle():
         check("stale row exports as Approved=No", rows[STUDENT][header.index("Approved")] == "No")
 
 
+def test_audit_fixes():
+    """Regressions for faults found in the September codebase audit."""
+    import os
+    from openpyxl import load_workbook
+    from app import excel_export
+
+    print("\n-- guards added after the codebase audit --")
+
+    # Feedback opening with "=" was written as a live Excel formula.
+    row = {"student_name": "S", "student_id": "1", "ai_score": 8.0, "ai_total": 10.0,
+           "faculty_score": None, "ai_feedback": "=1+1 see my note", "faculty_feedback": None,
+           "approved": 0, "ai_confidence": "high", "ai_disagreement": None,
+           "submission_attempt": 1, "review_stale": 0, "extraction_notes": None}
+    sheet = load_workbook(excel_export.build_grades_workbook("A", [row])).active
+    cells = [c for r in sheet.iter_rows(min_row=2, max_row=2) for c in r
+             if str(c.value or "").startswith("=")]
+    check("feedback starting with = is exported as text, not a formula",
+          bool(cells) and all(c.data_type == "s" for c in cells))
+    check("forcing it to text does not alter the feedback",
+          cells[0].value == "=1+1 see my note")
+
+    # A relative database path on App Service sits on ephemeral storage.
+    import importlib, sys
+    saved = {k: os.environ.get(k) for k in ("DATABASE_PATH", "WEBSITE_INSTANCE_ID", "APP_ENV")}
+    try:
+        for key in ("DATABASE_PATH", "WEBSITE_INSTANCE_ID"):
+            os.environ.pop(key, None)
+        os.environ["APP_ENV"] = "development"
+        sys.modules.pop("app.config", None)
+        check("off Azure the database stays local",
+              importlib.import_module("app.config").Config.DATABASE_PATH
+              == "instance/autograder.sqlite3")
+
+        os.environ["WEBSITE_INSTANCE_ID"] = "some-instance"
+        sys.modules.pop("app.config", None)
+        check("on Azure the database defaults under /home, which survives a restart",
+              importlib.import_module("app.config").Config.DATABASE_PATH
+              == "/home/site/data/autograder.sqlite3")
+
+        os.environ["DATABASE_PATH"] = "/explicit/path.sqlite3"
+        sys.modules.pop("app.config", None)
+        check("an explicit DATABASE_PATH still wins",
+              importlib.import_module("app.config").Config.DATABASE_PATH == "/explicit/path.sqlite3")
+
+        # Production with the published default key means forgeable sessions.
+        os.environ.pop("DATABASE_PATH", None)
+        os.environ.pop("FLASK_SECRET_KEY", None)
+        os.environ["APP_ENV"] = "production"
+        sys.modules.pop("app.config", None)
+        try:
+            importlib.import_module("app.config")
+            check("production refuses to start without FLASK_SECRET_KEY", False)
+        except RuntimeError as exc:
+            check("production refuses to start without FLASK_SECRET_KEY",
+                  "FLASK_SECRET_KEY" in str(exc))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        sys.modules.pop("app.config", None)
+        importlib.import_module("app.config")
+
+    # An unbounded attachment download can exhaust a 1.75 GB instance.
+    from app import canvas_client
+
+    class Oversized:
+        headers = {"Content-Length": str(500 * 1024 * 1024)}
+        def iter_content(self, _): yield b""
+        def close(self): pass
+
+    class Streamed:
+        headers = {}
+        def __init__(self, size): self.size = size
+        def iter_content(self, chunk): 
+            sent = 0
+            while sent < self.size:
+                block = min(chunk, self.size - sent)
+                sent += block
+                yield b"x" * block
+        def close(self): pass
+
+    try:
+        canvas_client._read_capped(Oversized())
+        check("an oversized attachment is refused on Content-Length", False)
+    except canvas_client.CanvasAPIError:
+        check("an oversized attachment is refused on Content-Length", True)
+    try:
+        canvas_client._read_capped(Streamed(canvas_client.MAX_ATTACHMENT_BYTES + 1024))
+        check("an attachment that lies about its size is cut off mid-stream", False)
+    except canvas_client.CanvasAPIError:
+        check("an attachment that lies about its size is cut off mid-stream", True)
+    check("an ordinary attachment still downloads whole",
+          canvas_client._read_capped(Streamed(1024)) == b"x" * 1024)
+
+    # The background job must be able to get a token without a request session.
+    from app import auth_utils
+    check("a token can be fetched without a session, for the background job",
+          callable(getattr(auth_utils, "access_token_for", None)))
+
+
 def test_canvas_rubric():
     from app import canvas_rubric
     from app.routes.rubric import _combine_rubric_sources
@@ -440,6 +542,7 @@ def main():
     test_review_lifecycle()
     test_triage_ordering()
     test_anchor_pipeline()
+    test_audit_fixes()
     test_canvas_rubric()
     test_upgrade_from_existing_database()
     test_stale_row_prefill()

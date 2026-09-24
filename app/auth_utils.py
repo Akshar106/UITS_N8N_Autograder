@@ -64,7 +64,17 @@ def get_valid_access_token():
     iu_user_id = session.get("iu_user_id")
     if not iu_user_id:
         raise AuthError("Not logged in.")
+    return access_token_for(iu_user_id)
 
+
+def access_token_for(iu_user_id):
+    """The same thing without a request session.
+
+    The background grading job runs for as long as the roster takes -- well past
+    the hour a Canvas token lasts -- and it has no session to read. Capturing one
+    token at the start means every submission after the expiry fails to download.
+    This lets the job ask for a fresh one per submission instead.
+    """
     token = storage.get_canvas_token(iu_user_id)
     if not token:
         raise CanvasNotConnected("Connect your Canvas account to continue.")

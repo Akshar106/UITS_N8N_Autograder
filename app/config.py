@@ -9,6 +9,20 @@ class Config:
     SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "dev-only-insecure-key")
 
     APP_ENV = os.getenv("APP_ENV", "development")
+
+    # The session cookie is what proves who a request belongs to, and every
+    # stored rubric and grade is scoped by the IU id inside it. Signed with a
+    # key that is published in this repository, anyone can mint a cookie naming
+    # any faculty member and read or change their students' grades. Refusing to
+    # start is the only safe answer; the alternative is a quiet auth bypass.
+    if APP_ENV == "production" and not os.getenv("FLASK_SECRET_KEY"):
+        raise RuntimeError(
+            "FLASK_SECRET_KEY is not set and APP_ENV=production. Set it as an "
+            "Application Setting to any long random string (for example the "
+            "output of `python3 -c \"import secrets; print(secrets.token_hex(32))\"`). "
+            "Changing it signs everyone out once; leaving it unset lets session "
+            "cookies be forged."
+        )
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = APP_ENV == "production"
@@ -59,4 +73,12 @@ class Config:
     REALLM_URL = os.getenv("REALLM_URL")
     REALLM_MODEL_NAME = os.getenv("REALLM_MODEL_NAME")
 
-    DATABASE_PATH = os.getenv("DATABASE_PATH", "instance/autograder.sqlite3")
+    # On Azure App Service the app runs from a package extracted into /tmp, so a
+    # RELATIVE path puts the database on ephemeral storage: every container
+    # recycle silently destroys the Canvas tokens, rubrics, grades and approvals.
+    # Only /home is persisted, so that is the default there. WEBSITE_INSTANCE_ID
+    # is set by App Service and by nothing else.
+    DATABASE_PATH = os.getenv("DATABASE_PATH") or (
+        "/home/site/data/autograder.sqlite3" if os.getenv("WEBSITE_INSTANCE_ID")
+        else "instance/autograder.sqlite3"
+    )

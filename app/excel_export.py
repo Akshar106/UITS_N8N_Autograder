@@ -62,6 +62,13 @@ def build_grades_workbook(assignment_name, submissions):
             "final_feedback": final_feedback or s.get("ai_error") or "",
         }
         ws.append([row[key] for _, key in COLUMNS])
+        # openpyxl turns any string beginning with "=" into a live formula, so a
+        # comment that opens with one is evaluated by Excel when the instructor
+        # opens the sheet instead of being read as the feedback it is. Force
+        # every text cell to stay text.
+        for cell in ws[ws.max_row]:
+            if cell.data_type == "f":
+                cell.data_type = "s"
 
     for col_idx, (label, _) in enumerate(COLUMNS, start=1):
         letter = get_column_letter(col_idx)

@@ -1,3 +1,4 @@
+import os
 import secrets
 
 import requests
@@ -175,6 +176,34 @@ def list_submissions(access_token, course_id, assignment_id):
     )
 
 
+# A submission is a document, and this instance has 1.75 GB of RAM shared by
+# every request. `resp.content` buffers the whole body, so one student attaching
+# a video takes the app down for the entire roster. The upload limit the app
+# enforces on its own forms does not apply to anything fetched from Canvas.
+MAX_ATTACHMENT_BYTES = int(os.getenv("MAX_ATTACHMENT_MB", "25")) * 1024 * 1024
+
+
+def _read_capped(resp):
+    """Read a response body, refusing anything over the cap."""
+    declared = resp.headers.get("Content-Length")
+    if declared and declared.isdigit() and int(declared) > MAX_ATTACHMENT_BYTES:
+        raise CanvasAPIError(
+            f"Submission file is {int(declared) // (1024 * 1024)} MB, over the "
+            f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB limit; it was not downloaded."
+        )
+    chunks, total = [], 0
+    for chunk in resp.iter_content(64 * 1024):
+        total += len(chunk)
+        if total > MAX_ATTACHMENT_BYTES:
+            resp.close()
+            raise CanvasAPIError(
+                f"Submission file exceeds the "
+                f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB limit; it was not downloaded."
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def download_attachment(url, access_token=None):
     """Fetch a submission attachment, unauthenticated first.
 
@@ -188,14 +217,15 @@ def download_attachment(url, access_token=None):
     The bearer token is kept only as a fallback, for instances or files served
     without a verifier.
     """
-    resp = _request("GET", url, timeout=30)
+    resp = _request("GET", url, timeout=30, stream=True)
     if resp.status_code == 200:
-        return resp.content
+        return _read_capped(resp)
 
     if access_token and resp.status_code in (401, 403):
-        retried = _request("GET", url, headers=_auth_headers(access_token), timeout=30)
+        retried = _request("GET", url, headers=_auth_headers(access_token),
+                           timeout=30, stream=True)
         if retried.status_code == 200:
-            return retried.content
+            return _read_capped(retried)
         raise CanvasAPIError(
             f"Failed to download submission file "
             f"({resp.status_code} unauthenticated, {retried.status_code} with token)"

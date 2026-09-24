@@ -11,4 +11,9 @@ if __name__ == "__main__":
     # about the certificate once -- accept it and the OIDC round trip works.
     # Production runs under gunicorn behind Azure's TLS, so this never applies there.
     ssl_context = "adhoc" if os.getenv("USE_HTTPS") == "1" else None
-    app.run(host="0.0.0.0", port=8000, debug=True, ssl_context=ssl_context)
+    # Never debug in production. Werkzeug's debugger serves an interactive
+    # console on any traceback, which is remote code execution on a public host;
+    # this file is only meant for local use, but a startup command of
+    # `python run.py` instead of gunicorn would have shipped it.
+    debug = app.config["APP_ENV"] != "production"
+    app.run(host="0.0.0.0", port=8000, debug=debug, ssl_context=ssl_context)
