@@ -1,40 +1,68 @@
 {% extends "base.html" %}
-{% block title %}Faculty Autograder{% endblock %}
+{% block title %}Faculty Autograder &mdash; Indiana University pilot{% endblock %}
+{% block head_extra %}
+  {# The only page on this site a crawler can reach. It should describe what the
+     tool is and who runs it, not read as a credential prompt: a one-page site
+     whose entire content is a university sign-in is what a phishing classifier
+     is built to catch, and this one was flagged as a deceptive page on exactly
+     that shape. Sign-in lives behind /auth/, which robots.txt asks crawlers to
+     skip. #}
+  <meta name="description" content="A pilot grading-assistant tool for Indiana University faculty. Drafts grades for Canvas assignments against a rubric, for faculty to review and approve.">
+  <meta name="robots" content="index, follow">
+{% endblock %}
 {% block content %}
   <div class="card">
     <h1>Faculty Autograder</h1>
-    <p>
-      This is a pilot tool for IU faculty that connects to your Canvas courses, grades student
-      submissions against a rubric you upload using an AI model, and lets you review and edit every
-      grade before anything is entered into the Canvas gradebook. No grade is ever submitted
-      automatically &mdash; faculty review is required for every submission.
+    <p class="muted">
+      A pilot project at Indiana University &middot; maintained by Akshar Patel
+      (<a href="mailto:akspate@iu.edu">akspate@iu.edu</a>) &middot; built with University
+      Information Technology Services.
     </p>
 
-    <h2>How it works</h2>
+    <p>
+      Faculty Autograder is a grading assistant for instructors who already use Canvas. An
+      instructor uploads the rubric they grade by, and the tool drafts a score and written
+      feedback for each submission against that rubric. Every draft is then reviewed by the
+      instructor, who can edit or replace any score before it counts for anything.
+    </p>
+
+    <h2>What it does</h2>
     <ol>
-      <li>Sign in with your IU account (via IU Login)</li>
-      <li>Connect your Canvas account (read-only access to your own courses)</li>
-      <li>Upload a rubric and run AI grading on student submissions</li>
-      <li>Review, edit, and approve grades before entering them in Canvas</li>
+      <li>Reads an instructor's own Canvas courses and assignments, with their permission.</li>
+      <li>Drafts a per-question score and feedback for each submission, against the rubric the
+        instructor supplied, using a language model hosted at Indiana University.</li>
+      <li>Shows every draft in a review queue, quoting the student's own words behind each mark,
+        so the instructor can check the reasoning rather than take a number on trust.</li>
+      <li>Exports the approved grades as a spreadsheet for the instructor to enter in Canvas.</li>
     </ol>
 
-    <h2>Privacy &amp; data</h2>
+    <h2>What it deliberately does not do</h2>
+    <ul>
+      <li>It never writes a grade back to Canvas. Nothing reaches a student without an instructor
+        approving it first.</li>
+      <li>It never reads courses an instructor does not teach; access is limited to their own.</li>
+      <li>It never operates a login form. Accounts and access are handled by the university's
+        central identity service, on the university's own site.</li>
+    </ul>
+
+    <h2>Data handling</h2>
     <p class="muted">
-      Student submission text is sent to the configured AI grading model solely to generate a
-      suggested grade and feedback; it is not used for any other purpose. Access tokens are stored
-      server-side and are never exposed to the browser.
+      Submission text is sent to the university-hosted grading model solely to draft a score and
+      feedback, and is used for nothing else. Access tokens are held server-side and are never
+      exposed to the browser. Each instructor sees only their own courses, rubrics and drafts.
     </p>
 
     {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
 
-    <p class="muted">
-      Continuing below will take you to IU Login (including a Duo push) on IU's own site.
-      This application never asks for, sees, or stores your IU password.
+    <h2>Instructor access</h2>
+    <p>
+      This pilot is open to Indiana University instructors. Signing in sends you to the
+      university's own identity service to authenticate; you return here afterwards.
     </p>
-    <a class="btn" href="{{ url_for('auth.iu_login') }}">Continue to IU Login</a>
+    <a class="btn" href="{{ url_for('auth.iu_login') }}">Sign in</a>
 
     <p class="muted">
-      Questions or feedback about this pilot? Contact akspate@iu.edu.
+      Questions, access requests or feedback: <a href="mailto:akspate@iu.edu">akspate@iu.edu</a>.
     </p>
   </div>
 {% endblock %}
