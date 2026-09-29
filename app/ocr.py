@@ -164,8 +164,14 @@ def read_pages(images, context=""):
 VISION_MODEL = os.getenv("OCR_VISION_MODEL") or os.getenv("REALLM_MODEL_NAME")
 
 
+def _media_type(image):
+    """JPEG for rendered pages, PNG for an uploaded screenshot."""
+    return "image/jpeg" if image[:3] == b"\xff\xd8\xff" else "image/png"
+
+
 def _data_uri(image):
-    return "data:image/png;base64," + base64.b64encode(image).decode("ascii")
+    return (f"data:{_media_type(image)};base64,"
+            + base64.b64encode(image).decode("ascii"))
 
 
 def _vision_payloads(image, index, context):
@@ -182,7 +188,8 @@ def _vision_payloads(image, index, context):
         [{"type": "text", "text": instruction},
          {"type": "image_url", "image_url": {"url": _data_uri(image)}}],
         [{"type": "text", "text": instruction},
-         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": encoded}}],
+         {"type": "image", "source": {"type": "base64",
+                                      "media_type": _media_type(image), "data": encoded}}],
     ]
 
 

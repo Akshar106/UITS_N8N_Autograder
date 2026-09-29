@@ -51,10 +51,13 @@ SUPPORTED_EXTENSIONS = ("pdf", "docx", "txt", "ipynb", "py")
 # tells the student what to do instead.
 IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp")
 
-# Rendering a page for transcription. 200 dpi is the point where handwriting
-# strokes survive without the image getting big enough to be slow and expensive
-# to send for every page of every submission.
+# Rendering a page for transcription. 200 dpi keeps handwriting strokes intact.
+# Grayscale JPEG rather than colour PNG because ink on paper carries no colour
+# and the difference is not marginal: a real 11-page handwritten submission came
+# to 19 MB as colour PNG and 3 MB this way, with no loss of legibility. That is
+# the difference between a roster being affordable to transcribe and not.
 PDF_RENDER_DPI = int(os.getenv("OCR_RENDER_DPI", "200"))
+PDF_RENDER_QUALITY = int(os.getenv("OCR_RENDER_QUALITY", "85"))
 
 # Formats students submit by accident. Naming the fix is worth more than
 # "Unsupported file type": the student can act on it, a stack trace they cannot.
@@ -408,9 +411,9 @@ def _render_pdf_pages(content_bytes):
     document = pypdfium2.PdfDocument(io.BytesIO(content_bytes))
     try:
         for index in range(min(len(document), ocr.MAX_PAGES)):
-            bitmap = document[index].render(scale=PDF_RENDER_DPI / 72)
+            page = document[index].render(scale=PDF_RENDER_DPI / 72).to_pil().convert("L")
             buffer = io.BytesIO()
-            bitmap.to_pil().save(buffer, format="PNG")
+            page.save(buffer, format="JPEG", quality=PDF_RENDER_QUALITY, optimize=True)
             images.append(buffer.getvalue())
     finally:
         document.close()

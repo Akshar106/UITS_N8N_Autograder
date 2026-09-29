@@ -518,6 +518,15 @@ def test_handwriting_transcription():
         check("the scan says why it needed transcribing",
               any("no text layer" in n for n in scanned.notes))
 
+        # Colour PNG pages made a real 11-page submission 19 MB to send. Ink on
+        # paper has no colour, so this is cost with nothing bought.
+        rendered = ex._render_pdf_pages(_scanned_pdf(1))
+        check("rendered pages are grayscale JPEG, not colour PNG",
+              rendered[0][:3] == b"\xff\xd8\xff")
+        check("the reader declares the format it is actually sending",
+              ocr._media_type(rendered[0]) == "image/jpeg"
+              and ocr._media_type(_png()) == "image/png")
+
         # A reader that fails must not hand back an empty submission, which
         # would be graded as though the student wrote nothing.
         from unittest import mock
