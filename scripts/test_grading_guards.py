@@ -715,6 +715,15 @@ def test_prompt_guards():
           "SAME score" in prompt and "padded" in prompt)
     check("the prompt demands one entry per rubric question",
           "EXACTLY ONE breakdown entry" in prompt)
+    check("the prompt explains the transcription markers",
+          "[illegible]" in prompt and "[struck:" in prompt and "[?word]" in prompt)
+    check("the prompt treats a guessed word charitably",
+          "correct under any plausible reading" in flat)
+    check("the prompt refuses to penalise transcription artefacts",
+          "DO NOT PENALISE THE TRANSCRIPTION" in prompt
+          and "resolve it in the student's favour" in flat)
+    check("the prompt will not judge a diagram it has not seen",
+          "you have not seen it" in flat)
     check("the prompt says the cell labels are not the student's work",
           "labels this tool added" in flat)
     check("the prompt distinguishes code that ran from code that did not",

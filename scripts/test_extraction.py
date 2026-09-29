@@ -15,6 +15,7 @@ exists to make sure that class of silent wrong grade cannot happen again.
 """
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -407,6 +408,159 @@ def test_notebook():
           "import pandas" in read("hw.py", b"import pandas as pd\n").text)
 
 
+def _png(text="handwritten answer"):
+    from PIL import Image, ImageDraw
+    image = Image.new("RGB", (900, 300), "white")
+    ImageDraw.Draw(image).text((30, 30), text, fill="black")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _scanned_pdf(pages=2):
+    """A PDF whose pages are pictures of words -- no text layer at all."""
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as rl
+
+    picture = io.BytesIO(_png())
+    out = io.BytesIO()
+    pdf = rl.Canvas(out, pagesize=(612, 792))
+    for _ in range(pages):
+        picture.seek(0)
+        pdf.drawImage(ImageReader(picture), 40, 400, width=500, height=250)
+        pdf.showPage()
+    pdf.save()
+    return out.getvalue()
+
+
+def _with_backend(name, transcript):
+    """Reload extract/ocr with a backend selected and the reader stubbed."""
+    import importlib
+    from unittest import mock
+    import app.extract
+    import app.ocr
+
+    os.environ["OCR_BACKEND"] = name
+    importlib.reload(app.ocr)
+    importlib.reload(app.extract)
+    reader = lambda image, index, context: app.ocr.PageText(index, transcript)  # noqa: E731
+    return app.ocr, app.extract, mock.patch.object(app.ocr, "_read_page_vision", side_effect=reader)
+
+
+def _restore():
+    import importlib
+    import app.extract
+    import app.ocr
+    os.environ.pop("OCR_BACKEND", None)
+    importlib.reload(app.ocr)
+    importlib.reload(app.extract)
+
+
+TRANSCRIPT = ("Q1. A BST keps smaller values on the left.\n"
+              "Worst case is O(n) when [?unbalanced].\n"
+              "[struck: average is O(n^2)]\n"
+              "[diagram: a tree with 7 nodes]\n"
+              "[illegible]")
+
+
+def test_handwriting_off_by_default():
+    print("\n-- with no reader configured, images are refused, not graded --")
+    from app import extract as ex
+
+    check("image formats are not accepted by default",
+          "png" not in ex.supported_extensions())
+    try:
+        ex.extract_document("page.png", _png())
+        check("a photograph is refused when reading is off", False)
+    except ex.ExtractionError as exc:
+        # .png keeps its own actionable message rather than the generic one.
+        check("a photograph is refused when reading is off",
+              "Images cannot be read" in str(exc))
+    try:
+        ex.extract_document("scan.pdf", _scanned_pdf())
+        check("a scanned PDF is refused when reading is off", False)
+    except ex.ExtractionError as exc:
+        check("a scanned PDF is refused when reading is off",
+              "scan or photographs" in str(exc))
+
+
+def test_handwriting_transcription():
+    print("\n-- handwriting and scans, once a reader is configured --")
+    ocr, ex, patch = _with_backend("vision", TRANSCRIPT)
+    try:
+        check("image formats become acceptable", "png" in ex.supported_extensions())
+
+        with patch:
+            result = ex.extract_document("page.png", _png(), "DSA Midterm")
+
+        check("the transcript reaches the grader", "A BST keps smaller values" in result.text)
+        check("the page is labelled as a machine transcription",
+              "machine transcription" in result.text)
+        check("the submission is marked as transcribed, not read",
+              result.stats["from_ocr"] is True)
+        check("a transcribed page is not treated as a failed read",
+              not result.looks_incomplete)
+        check("faculty are told the grade rests on a reading of the writing",
+              any("check it against the original" in n for n in result.notes))
+        check("uncertainty markers are counted for the reviewer",
+              result.stats["ocr_markers"] == 2)
+
+        # The failure that no downstream check could ever catch.
+        check("the student's own misspelling survives transcription",
+              "keps" in result.text and "keeps smaller" not in result.text)
+
+        with patch:
+            scanned = ex.extract_document("scan.pdf", _scanned_pdf(2), "DSA")
+        check("a scanned PDF is rasterised and transcribed page by page",
+              scanned.stats["pages"] == 2 and scanned.stats["from_ocr"] is True)
+        check("a transcribed scan is graded rather than refused",
+              not scanned.looks_incomplete and scanned.chars > 0)
+        check("the scan says why it needed transcribing",
+              any("no text layer" in n for n in scanned.notes))
+
+        # A reader that fails must not hand back an empty submission, which
+        # would be graded as though the student wrote nothing.
+        from unittest import mock
+        with mock.patch.object(ocr, "_read_page_vision",
+                               side_effect=ocr.OCRError("reader unavailable")):
+            try:
+                ex.extract_document("page.png", _png())
+                check("a failed read refuses instead of grading a blank", False)
+            except ex.ExtractionError as exc:
+                check("a failed read refuses instead of grading a blank",
+                      "reader unavailable" in str(exc))
+
+        with mock.patch.object(ocr, "_read_page_vision",
+                               side_effect=lambda i, n, c: ocr.PageText(n, "")):
+            try:
+                ex.extract_document("page.png", _png())
+                check("an empty transcript refuses instead of grading a blank", False)
+            except ex.ExtractionError:
+                check("an empty transcript refuses instead of grading a blank", True)
+    finally:
+        _restore()
+
+
+def test_transcription_prompt():
+    print("\n-- the transcription prompt defends against a helpful reader --")
+    from app import ocr as o
+    prompt = o.TRANSCRIPTION_PROMPT
+    flat = " ".join(prompt.split())
+
+    check("it forbids correcting the student's mistakes",
+          "DO NOT CORRECT MISTAKES" in prompt)
+    check("it says why: corrections become unearned marks",
+          "marks the student did not earn" in flat)
+    check("it forbids answering or grading",
+          "NOT grading it and NOT answering it" in flat)
+    check("it asks for illegible text to be marked", "[illegible]" in prompt)
+    check("it asks for guesses to be marked", "[?guess]" in prompt)
+    check("it keeps crossed-out work visible rather than deciding for the grader",
+          "[struck:" in prompt and "the grader decides" in flat)
+    check("it describes diagrams rather than interpreting them",
+          "[diagram:" in prompt and "Do not interpret whether it is correct" in flat)
+
+
 def test_refusals():
     print("\n-- unsupported formats are refused by name --")
 
@@ -425,6 +579,8 @@ def test_refusals():
     except extract.ExtractionError as exc:
         check("an unknown extension names the accepted formats",
               ".pdf, .docx, .txt, .ipynb and .py" in str(exc))
+        check("the accepted list is built from what is actually enabled",
+              ".png" not in str(exc))
 
     try:
         read("noextension", b"content")
@@ -459,6 +615,9 @@ def main():
     test_pdf()
     test_txt_encodings()
     test_notebook()
+    test_handwriting_off_by_default()
+    test_handwriting_transcription()
+    test_transcription_prompt()
     test_refusals()
     test_text_entry()
 

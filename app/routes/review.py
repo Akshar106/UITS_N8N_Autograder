@@ -55,6 +55,8 @@ def review_queue(course_id, assignment_id):
         s["attention"] = _attention_bucket(s)
         s["unverified_quotes"] = sum(1 for q in s["breakdown"] if q.get("evidence_verified") is False)
         s["notes"] = [n for n in (s["extraction_notes"] or "").split("\n") if n.strip()]
+        # Recorded by app/ocr.py when a submission had to be transcribed.
+        s["from_ocr"] = "machine transcription" in (s["extraction_notes"] or "")
         s["knowledge_judgments"] = sum(
             1 for q in s["breakdown"] if q.get("basis") in ("knowledge", "both"))
 

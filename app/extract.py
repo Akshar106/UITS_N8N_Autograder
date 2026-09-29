@@ -7,11 +7,13 @@ no sign anything had gone wrong. A silent partial extraction is worse than a
 loud failure, so every reader reports what it saw as well as what it read, and
 the caller can refuse to grade a file that looks like it lost content.
 
-Supported: .pdf, .docx, .txt, .ipynb, .py. Everything else is refused by name.
+Supported: .pdf, .docx, .txt, .ipynb, .py, and page images when image reading
+is switched on (see app/ocr.py). Everything else is refused by name.
 """
 import html
 import io
 import json
+import os
 import logging
 import re
 from dataclasses import dataclass, field
@@ -19,6 +21,8 @@ from dataclasses import dataclass, field
 import pdfplumber
 from charset_normalizer import from_bytes
 from docx import Document
+
+from app import ocr
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,16 @@ _HEADER_FALLBACK_THRESHOLD = 120
 _PAGE_NUMBER_RE = re.compile(r"^(page\s*)?\d+(\s*(of|/)\s*\d+)?$", re.IGNORECASE)
 
 SUPPORTED_EXTENSIONS = ("pdf", "docx", "txt", "ipynb", "py")
+
+# Photographs and scans of handwritten work. Readable only when a transcription
+# backend is configured; otherwise they fall through to the refusal below, which
+# tells the student what to do instead.
+IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp")
+
+# Rendering a page for transcription. 200 dpi is the point where handwriting
+# strokes survive without the image getting big enough to be slow and expensive
+# to send for every page of every submission.
+PDF_RENDER_DPI = int(os.getenv("OCR_RENDER_DPI", "200"))
 
 # Formats students submit by accident. Naming the fix is worth more than
 # "Unsupported file type": the student can act on it, a stack trace they cannot.
@@ -98,26 +112,46 @@ class Extracted:
         return bool(self.stats.get("incomplete"))
 
 
+def _list_formats(extensions):
+    names = ["." + e for e in extensions]
+    return ", ".join(names[:-1]) + f" and {names[-1]}" if len(names) > 1 else names[0]
+
+
+def supported_extensions():
+    """What this app will accept right now, which depends on configuration."""
+    return SUPPORTED_EXTENSIONS + (IMAGE_EXTENSIONS if ocr.is_enabled() else ())
+
+
 def _ext(filename):
     return (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
 
 
-def extract_document(filename, content_bytes):
-    """Read a submission. Raises ExtractionError when nothing usable came out."""
+def extract_document(filename, content_bytes, assignment_name=""):
+    """Read a submission. Raises ExtractionError when nothing usable came out.
+
+    assignment_name is passed to the image reader as context only -- it helps a
+    transcriber with proper nouns and notation, and must never carry an answer.
+    """
     ext = _ext(filename)
-    if ext in _KNOWN_UNSUPPORTED:
+    allowed = supported_extensions()
+    if ext in IMAGE_EXTENSIONS and ocr.is_enabled():
+        pass  # handled below by the transcription reader
+    elif ext in _KNOWN_UNSUPPORTED:
         raise ExtractionError(_KNOWN_UNSUPPORTED[ext])
-    if ext not in SUPPORTED_EXTENSIONS:
+    if ext not in allowed:
         raise ExtractionError(
             f"Unsupported file type: .{ext or 'unknown'}. Accepted formats are "
-            f".pdf, .docx, .txt, .ipynb and .py."
+            f"{_list_formats(allowed)}."
         )
     if not content_bytes:
         raise ExtractionError("The file is empty.")
 
-    reader = {"pdf": _read_pdf, "docx": _read_docx, "txt": _read_txt,
-              "ipynb": _read_ipynb, "py": _read_txt}[ext]
-    result = reader(content_bytes)
+    if ext in IMAGE_EXTENSIONS:
+        result = _read_image(content_bytes, assignment_name)
+    else:
+        reader = {"pdf": _read_pdf, "docx": _read_docx, "txt": _read_txt,
+                  "ipynb": _read_ipynb, "py": _read_txt}[ext]
+        result = reader(content_bytes, assignment_name) if ext == "pdf" else reader(content_bytes)
     result.text = _tidy(result.text)
     result.stats["chars"] = result.chars
 
@@ -128,9 +162,9 @@ def extract_document(filename, content_bytes):
     return result
 
 
-def extract_text(filename, content_bytes):
+def extract_text(filename, content_bytes, assignment_name=""):
     """Text only, for callers that have no use for the completeness signals."""
-    return extract_document(filename, content_bytes).text
+    return extract_document(filename, content_bytes, assignment_name).text
 
 
 def _tidy(text):
@@ -329,7 +363,61 @@ def _read_docx(content_bytes):
 
 # --- .pdf ---------------------------------------------------------------------
 
-def _read_pdf(content_bytes):
+def _transcribe(images, assignment_name, source):
+    """Shared path for anything whose text only exists as pixels."""
+    result = Extracted()
+    pages = ocr.read_pages(images, context=assignment_name)
+    if not any(page.text.strip() for page in pages):
+        # Checked on the pages, not on the rendered transcript: the "--- page N
+        # ---" headers are ours, so a transcript of nothing is still non-empty
+        # and would otherwise be graded as a student who wrote nothing.
+        raise ExtractionError(
+            "The page images were read but no text came back from any page.")
+    result.text = ocr.render_transcript(pages)
+    result.notes.extend(ocr.summarise(pages))
+    result.stats.update({
+        "source": source,
+        "from_ocr": True,
+        "pages": len(pages),
+        "ocr_backend": ocr.backend_name(),
+        "ocr_markers": sum(page.marker_count for page in pages),
+        "ocr_doubtful_words": sum(len(page.doubtful_words) for page in pages),
+    })
+    return result
+
+
+def _read_image(content_bytes, assignment_name=""):
+    """A photograph or scan of a single page."""
+    try:
+        return _transcribe([content_bytes], assignment_name, "image")
+    except ocr.OCRError as exc:
+        raise ExtractionError(str(exc)) from exc
+
+
+def _render_pdf_pages(content_bytes):
+    """Rasterise a PDF so a page with no text layer can still be read."""
+    try:
+        import pypdfium2
+    except ImportError as exc:  # pragma: no cover -- dependency is pinned
+        raise ExtractionError(
+            "This PDF has no readable text and would need to be transcribed from "
+            "page images, but the PDF renderer is not installed."
+        ) from exc
+
+    images = []
+    document = pypdfium2.PdfDocument(io.BytesIO(content_bytes))
+    try:
+        for index in range(min(len(document), ocr.MAX_PAGES)):
+            bitmap = document[index].render(scale=PDF_RENDER_DPI / 72)
+            buffer = io.BytesIO()
+            bitmap.to_pil().save(buffer, format="PNG")
+            images.append(buffer.getvalue())
+    finally:
+        document.close()
+    return images
+
+
+def _read_pdf(content_bytes, assignment_name=""):
     result = Extracted()
     try:
         with pdfplumber.open(io.BytesIO(content_bytes)) as pdf:
@@ -366,7 +454,25 @@ def _read_pdf(content_bytes):
 
     if images and scarce_text:
         # Almost certainly a scan or a photo exported to PDF: the pages carry
-        # pictures of words, and there is no text layer to read at all.
+        # pictures of words, and there is no text layer to read at all. This is
+        # exactly the handwritten-submission case, so transcribe it when a
+        # reader is available and keep the refusal when one is not.
+        if ocr.is_enabled():
+            try:
+                transcribed = _transcribe(
+                    _render_pdf_pages(content_bytes), assignment_name, "pdf-scan")
+            except ocr.OCRError as exc:
+                result.stats["incomplete"] = True
+                result.notes.append(
+                    f"This PDF has no readable text layer and transcribing its pages "
+                    f"failed: {exc}"
+                )
+                return result
+            transcribed.notes.insert(
+                0, f"This PDF's {page_count} page(s) carry no text layer, so they were "
+                   f"transcribed from images.")
+            return transcribed
+
         result.stats["incomplete"] = True
         result.notes.append(
             f"This PDF has {page_count} page{'s' if page_count != 1 else ''} but "

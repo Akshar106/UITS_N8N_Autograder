@@ -69,6 +69,11 @@ class Config:
         t.strip() for t in os.getenv("INSTRUCTOR_ENROLLMENT_TYPES", "teacher,ta").split(",") if t.strip()
     ]
 
+    # Reading handwriting and scans. "none" keeps the previous behaviour:
+    # an image-only submission is refused rather than graded as a blank.
+    # See app/ocr.py for what each backend costs in trust and in paperwork.
+    OCR_BACKEND = os.getenv("OCR_BACKEND", "none").strip().lower()
+
     REALLM_API_KEY = os.getenv("REALLM_API_KEY")
     REALLM_URL = os.getenv("REALLM_URL")
     REALLM_MODEL_NAME = os.getenv("REALLM_MODEL_NAME")

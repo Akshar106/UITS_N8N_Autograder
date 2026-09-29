@@ -103,6 +103,18 @@
               {% if s.review_stale %}
                 <span class="note note-error">Resubmitted or re-scoped since you approved this &mdash; please re-check.</span>
               {% endif %}
+              {% if s.from_ocr %}
+                {# Not the same kind of warning as a partial read. The grade
+                   rests on a machine's reading of handwriting, and the quote
+                   check cannot catch a misreading because it verifies the
+                   quote against that same reading. #}
+                <span class="note note-error">
+                  Read from handwriting or a scan by machine transcription. The evidence
+                  quotes were checked against the transcript, not against the page, so a
+                  misreading would not have been caught &mdash; compare with the original
+                  in Canvas before approving.
+                </span>
+              {% endif %}
               {% if s.notes %}
                 {# How well the file was read, not what the answer was worth. A
                    grade computed from half a document should never look as solid

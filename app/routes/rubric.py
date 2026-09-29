@@ -199,8 +199,8 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                 except Exception as exc:  # noqa: BLE001 -- reported on the row, not raised
                     current_app.logger.warning("Canvas token unavailable mid-run: %s", exc)
 
-                student_text, submission_filename, extraction_error, extraction_notes = \
-                    _extract_submission_text(submission, access_token)
+                student_text, submission_filename, extraction_error, extraction_notes, from_ocr = \
+                    _extract_submission_text(submission, access_token, rubric["assignment_name"])
                 notes_text = "\n".join(extraction_notes) or None
 
                 # Canvas bumps `attempt` on every resubmission. Storing it is what
@@ -225,6 +225,13 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                     )
                     if result["ok"]:
                         data = result["data"]
+                        if from_ocr:
+                            # The evidence check cannot protect a transcript from
+                            # itself: a quote is verified against the machine's
+                            # reading, so a misreading is confirmed, not caught.
+                            # The row goes to the top of the queue regardless of
+                            # how sure the grader says it is.
+                            data["confidence"] = "low"
                         storage.upsert_graded_submission(
                             iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
                             student_name, submission_filename,
@@ -267,7 +274,7 @@ def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, ac
         submission = by_student.get(str(row["student_id"]))
         if submission is None:
             continue  # graded earlier but no longer in this fetch
-        text, _filename, error, _notes = _extract_submission_text(submission, access_token)
+        text, _filename, error, _notes, _ocr = _extract_submission_text(submission, access_token)
         if error or not text:
             continue
         candidates.append({
@@ -279,13 +286,18 @@ def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, ac
     return grading.select_anchor_examples(candidates)
 
 
-def _extract_submission_text(submission, access_token):
-    """Return (text, filenames, error, notes) for one Canvas submission.
+def _extract_submission_text(submission, access_token, assignment_name=""):
+    """Return (text, filenames, error, notes, from_ocr) for one Canvas submission.
 
     notes are warnings about *how well* the file was read -- images that could
     not be looked at, a table whose ordering may be off, a non-UTF-8 encoding.
     They are not failures, but they are the difference between a faculty member
     trusting a score and knowing to open the file first.
+
+    from_ocr says the text is a machine's reading of handwriting or a scan
+    rather than a text layer. It travels separately from the notes because it
+    changes how much the resulting grade can be trusted, not merely what the
+    faculty member is told.
     """
     attachments = submission.get("attachments") or []
     if attachments:
@@ -293,12 +305,13 @@ def _extract_submission_text(submission, access_token):
         # all of them by concatenating their text, not just the first.
         parts, problems, notes, filenames = [], [], [], []
         incomplete = False
+        from_ocr = False
 
         for attachment in attachments:
             filename = attachment.get("filename", "file")
             try:
                 content = canvas_client.download_attachment(attachment["url"], access_token)
-                document = extract.extract_document(filename, content)
+                document = extract.extract_document(filename, content, assignment_name)
             except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
                 problems.append(f"[Could not read {filename}: {exc}]")
                 continue
@@ -307,11 +320,12 @@ def _extract_submission_text(submission, access_token):
             parts.append(f"--- {filename} ---\n{document.text}")
             notes.extend(f"{filename}: {note}" for note in document.notes)
             incomplete = incomplete or document.looks_incomplete
+            from_ocr = from_ocr or bool(document.stats.get("from_ocr"))
 
         combined = "\n\n".join(parts)
         if not combined.strip():
             reason = " ".join(problems) or "No text could be extracted from the submitted file(s)."
-            return None, ", ".join(a.get("filename", "file") for a in attachments), reason, notes
+            return None, ", ".join(a.get("filename", "file") for a in attachments), reason, notes, from_ocr
 
         # One unreadable file among several is not a failure, but the grade is
         # then based on part of the work -- which the faculty member has to know.
@@ -322,13 +336,13 @@ def _extract_submission_text(submission, access_token):
         # than graded: an invented zero on correct work is the worst outcome
         # this pipeline can produce, and it looks entirely plausible.
         if incomplete:
-            return None, ", ".join(filenames), " ".join(notes) or "Extraction looks incomplete.", notes
+            return None, ", ".join(filenames), " ".join(notes) or "Extraction looks incomplete.", notes, from_ocr
 
-        return combined, ", ".join(filenames), None, notes
+        return combined, ", ".join(filenames), None, notes, from_ocr
 
     body = submission.get("body")
     if body and extract.strip_html(body):
-        return extract.strip_html(body), None, None, []
+        return extract.strip_html(body), None, None, [], False
 
     return None, None, "No file attachment or text entry found for this submission.", []
 
