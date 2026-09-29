@@ -56,6 +56,21 @@ def main():
     rubric_path, submissions_path = Path(argv[0]), Path(argv[1])
     assignment_name = argv[2] if len(argv) > 2 else "Test Assignment"
 
+    # An unset shell variable arrives as "", which Path turns into "." -- and
+    # the failure then surfaces as IsADirectoryError from deep inside pathlib,
+    # which says nothing about which argument was wrong.
+    for label, path, want_file in (("rubric", rubric_path, True),
+                                   ("submission", submissions_path, False)):
+        if not str(path).strip() or str(path) == ".":
+            print(f"No {label} path given (an empty shell variable?).", file=sys.stderr)
+            return 1
+        if not path.exists():
+            print(f"{label.capitalize()} not found: {path}", file=sys.stderr)
+            return 1
+        if want_file and path.is_dir():
+            print(f"The {label} must be a file, not a folder: {path}", file=sys.stderr)
+            return 1
+
     rubric = read(rubric_path, assignment_name)
     print(f"Rubric: {rubric_path.name}")
     print(describe(rubric))
