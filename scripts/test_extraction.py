@@ -550,6 +550,43 @@ def test_handwriting_transcription():
         _restore()
 
 
+def test_vision_gateway_shape():
+    print("\n-- the request shape and model, as measured against IU's gateway --")
+    import importlib
+    import app.ocr
+
+    os.environ["OCR_BACKEND"] = "vision"
+    os.environ.pop("OCR_VISION_MODEL", None)
+    os.environ.pop("OCR_TRY_ANTHROPIC_SHAPE", None)
+    importlib.reload(app.ocr)
+    o = app.ocr
+    try:
+        check("the default transcriber is a model probed to actually see images",
+              o.VISION_MODEL == "gemma-4-31B-it")
+        # The gateway answers the Anthropic block with a 500, so trying it
+        # spends a failed request on every page of every submission.
+        check("only the shape this gateway accepts is sent by default",
+              len(o._vision_payloads(b"\x89PNG", 1, "ctx")) == 1)
+        check("the sent shape is the OpenAI one",
+              o._vision_payloads(b"\x89PNG", 1, "ctx")[0][1]["type"] == "image_url")
+
+        os.environ["OCR_TRY_ANTHROPIC_SHAPE"] = "1"
+        importlib.reload(app.ocr)
+        check("the other shape is still available for a different gateway",
+              len(app.ocr._vision_payloads(b"\x89PNG", 1, "ctx")) == 2)
+        os.environ.pop("OCR_TRY_ANTHROPIC_SHAPE", None)
+
+        # A document-conversion model answers in layout markup.
+        doctags = ("<loc_0><loc_0><loc_500><loc_500><_unknown>"
+                   "B <- empty array </line_code>")
+        check("layout markup is stripped before the grader sees it",
+              o.strip_doctags(doctags) == "B <- empty array")
+        check("ordinary transcription is left alone",
+              o.strip_doctags("A BST keeps values [?left]") == "A BST keeps values [?left]")
+    finally:
+        _restore()
+
+
 def test_transcription_prompt():
     print("\n-- the transcription prompt defends against a helpful reader --")
     from app import ocr as o
@@ -626,6 +663,7 @@ def main():
     test_notebook()
     test_handwriting_off_by_default()
     test_handwriting_transcription()
+    test_vision_gateway_shape()
     test_transcription_prompt()
     test_refusals()
     test_text_entry()

@@ -42,6 +42,7 @@ Backends, chosen with OCR_BACKEND:
 """
 import base64
 import logging
+import re
 import os
 import time
 
@@ -103,6 +104,20 @@ Output the transcription only. No preamble, no commentary, no grading.\
 """
 
 
+# <loc_0><loc_120>, <_unknown>, </line_code>, <otsl>... -- Granite Docling's
+# layout vocabulary. They describe where text sits on the page, which the
+# grader has no use for and would otherwise read as part of the answer.
+_DOCTAG_RE = re.compile(r"</?(?:loc_\d+|[a-z_]+)>")
+
+
+def strip_doctags(text):
+    """Remove document-conversion markup, keeping the text it wrapped."""
+    if "<loc_" not in text:
+        return text
+    cleaned = _DOCTAG_RE.sub(" ", text)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
 def is_enabled():
     return BACKEND in ("vision", "azure")
 
@@ -161,7 +176,24 @@ def read_pages(images, context=""):
 
 # --- the ReaLLM gateway, with a vision-capable model --------------------------
 
-VISION_MODEL = os.getenv("OCR_VISION_MODEL") or os.getenv("REALLM_MODEL_NAME")
+# Measured against IU's gateway, not guessed: gpt-oss-120b and glm-5.2 report
+# no vision (glm-5.2 refuses outright as "not a multimodal model"), while
+# gemma-4-31B-it and granite-docling-258m both read a code out of a test image.
+# gemma is the default because it follows an instruction prompt, which is what
+# the transcription rules depend on; granite-docling is a 258M document-
+# conversion model, far cheaper per page and a better fit for scanned PRINT,
+# but it emits DocTags rather than prose. Re-run scripts/probe_vision.py before
+# trusting any other name here.
+DEFAULT_VISION_MODEL = "gemma-4-31B-it"
+VISION_MODEL = (os.getenv("OCR_VISION_MODEL")
+                or (DEFAULT_VISION_MODEL if BACKEND == "vision" else None)
+                or os.getenv("REALLM_MODEL_NAME"))
+
+# IU's gateway is LiteLLM in front of vLLM and accepts only OpenAI-shaped
+# messages: the Anthropic block comes back as a 500 on every page. Off by
+# default so a roster does not pay for a failed request per page, but kept for
+# gateways that want the other shape.
+TRY_ANTHROPIC_SHAPE = os.getenv("OCR_TRY_ANTHROPIC_SHAPE", "0") == "1"
 
 
 def _media_type(image):
@@ -183,14 +215,15 @@ def _vision_payloads(image, index, context):
     sent usually answers as though there were no image at all.
     """
     instruction = f"Transcribe page {index}." + (f" Assignment: {context}." if context else "")
-    encoded = base64.b64encode(image).decode("ascii")
-    return [
-        [{"type": "text", "text": instruction},
-         {"type": "image_url", "image_url": {"url": _data_uri(image)}}],
-        [{"type": "text", "text": instruction},
-         {"type": "image", "source": {"type": "base64",
-                                      "media_type": _media_type(image), "data": encoded}}],
-    ]
+    shapes = [[{"type": "text", "text": instruction},
+               {"type": "image_url", "image_url": {"url": _data_uri(image)}}]]
+    if TRY_ANTHROPIC_SHAPE:
+        encoded = base64.b64encode(image).decode("ascii")
+        shapes.append([{"type": "text", "text": instruction},
+                       {"type": "image", "source": {"type": "base64",
+                                                    "media_type": _media_type(image),
+                                                    "data": encoded}}])
+    return shapes
 
 
 def _read_page_vision(image, index, context):
@@ -229,7 +262,7 @@ def _read_page_vision(image, index, context):
         if text:
             # No per-word confidence from a chat model; the markers it was asked
             # to leave are the only uncertainty signal available.
-            return PageText(index, text)
+            return PageText(index, strip_doctags(text))
         last_error = "the model returned nothing for this page"
 
     raise OCRError(f"Image reading failed on page {index} ({last_error}).")
