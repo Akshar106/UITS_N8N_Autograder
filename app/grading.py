@@ -141,6 +141,13 @@ The transcription is a reading, not the page. Grade accordingly:
   is correct under any plausible reading of that word, award the marks.
 - `[struck: ...]` is work the student crossed out. It does not count for or
   against them; grade what remains.
+- A CROSSING-OUT IS NOT ALWAYS MARKED. A light pen stroke often does not survive
+  transcription, so a correction can arrive as both words in a row: "iterations
+  of outer inner loop", "the answer is 5 7". Where two adjacent words or values
+  contradict each other and the sentence only makes sense with one of them, that
+  is a correction the reader failed to mark. Read it as the student's final
+  answer -- normally the second -- and do not mark them down for the doubling or
+  for the sentence reading oddly. Say in the comment that you read it that way.
 - `[diagram: ...]` is a description of something drawn, written by a machine
   that cannot judge whether it is right. Use it to see that a diagram exists.
   If the marks turn on whether the drawing is CORRECT, say so in the comment

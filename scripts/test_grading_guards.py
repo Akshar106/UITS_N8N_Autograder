@@ -717,6 +717,10 @@ def test_prompt_guards():
           "EXACTLY ONE breakdown entry" in prompt)
     check("the prompt explains the transcription markers",
           "[illegible]" in prompt and "[struck:" in prompt and "[?word]" in prompt)
+    check("the prompt survives an unmarked crossing-out",
+          "A CROSSING-OUT IS NOT ALWAYS MARKED" in prompt
+          and "outer inner loop" in prompt
+          and "do not mark them down for the doubling" in flat)
     check("the prompt treats a guessed word charitably",
           "correct under any plausible reading" in flat)
     check("the prompt refuses to penalise transcription artefacts",
