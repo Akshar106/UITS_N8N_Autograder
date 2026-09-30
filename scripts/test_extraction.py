@@ -603,6 +603,18 @@ def test_transcription_prompt():
     check("it asks for guesses to be marked", "[?guess]" in prompt)
     check("it keeps crossed-out work visible rather than deciding for the grader",
           "[struck:" in prompt and "the grader decides" in flat)
+    # Both of these are failures observed on a real handwritten submission
+    # rather than hypotheticals: a struck-and-replaced word came back as
+    # "outer inner", and LaTeX leaked into 7 of 11 pages while the other 4 were
+    # plain text.
+    check("it handles a correction, not just a deletion",
+          "[struck: outer] inner" in prompt and "NEVER as \"outer inner\"" in flat)
+    check("it forbids LaTeX and Markdown markup",
+          "No LaTeX and no Markdown" in prompt)
+    check("it requires the same symbol to transcribe the same way on every page",
+          "Be CONSISTENT across pages" in prompt)
+    check("it keeps the student's notation rather than normalising it",
+          'If they wrote "lg", write "lg", not "log"' in flat)
     check("it describes diagrams rather than interpreting them",
           "[diagram:" in prompt and "Do not interpret whether it is correct" in flat)
 

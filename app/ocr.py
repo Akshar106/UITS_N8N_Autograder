@@ -93,12 +93,28 @@ MARK WHAT YOU CANNOT READ.
 - A word you can only guess at: [?guess] -- for example [?binary]
 - Text the student crossed out: [struck: the crossed out words]. Do not silently
   drop it and do not silently keep it; the grader decides whether it counts.
+- A CORRECTION is a crossing-out with the replacement written beside or above
+  it, and it is the case most often got wrong. Mark the deletion and keep the
+  replacement: a student who struck "outer" and wrote "inner" must transcribe
+  as "[struck: outer] inner", NEVER as "outer inner", which reads as a garbled
+  sentence and costs them the mark they earned by correcting it.
 
 DESCRIBE WHAT IS NOT TEXT.
 
 - A diagram, drawing, tree, graph or plot cannot be transcribed. Write
   [diagram: a short factual description of what is drawn], describing only what
   is actually there. Do not interpret whether it is correct.
+
+WRITE PLAIN TEXT, NOT MARKUP.
+
+- No LaTeX and no Markdown. Write what the symbol is, not how to typeset it:
+  "<-" or "←" for an assignment arrow, "Theta(n^2)" or "Θ(n^2)", "<=", "therefore"
+  or "∴", "sqrt(N)". Never $\leftarrow$, $\Theta$, $\le$, \therefore or $...$.
+- Be CONSISTENT across pages: the same symbol must transcribe the same way on
+  page 9 as on page 1. A grader comparing two answers cannot tell a difference
+  in the student's notation from a difference in yours.
+- Keep the student's own notation. If they wrote "lg", write "lg", not "log";
+  if they wrote "Θ", do not substitute "O". Those distinctions carry marks.
 
 Output the transcription only. No preamble, no commentary, no grading.\
 """
