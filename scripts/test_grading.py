@@ -59,7 +59,7 @@ def main():
     # An unset shell variable arrives as "", which Path turns into "." -- and
     # the failure then surfaces as IsADirectoryError from deep inside pathlib,
     # which says nothing about which argument was wrong.
-    for label, path, want_file in (("rubric", rubric_path, True),
+    for label, path, want_file in (("rubric", rubric_path, False),
                                    ("submission", submissions_path, False)):
         if not str(path).strip() or str(path) == ".":
             print(f"No {label} path given (an empty shell variable?).", file=sys.stderr)
@@ -71,9 +71,30 @@ def main():
             print(f"The {label} must be a file, not a folder: {path}", file=sys.stderr)
             return 1
 
-    rubric = read(rubric_path, assignment_name)
+    # A folder is read as one rubric, the way the app combines a Canvas rubric
+    # with an uploaded answer key: the questions in one file and the marking
+    # scheme in another is the normal shape, not a special case.
+    rubric_files = (sorted(p for p in rubric_path.iterdir() if p.is_file())
+                    if rubric_path.is_dir() else [rubric_path])
+    if not rubric_files:
+        print(f"No files in {rubric_path}", file=sys.stderr)
+        return 1
+
+    rubric_parts = []
     print(f"Rubric: {rubric_path.name}")
-    print(describe(rubric))
+    for path in rubric_files:
+        try:
+            document = read(path, assignment_name)
+        except extract.ExtractionError as exc:
+            print(f"  {path.name}: REFUSED -- {exc}")
+            continue
+        print(f"  {path.name}")
+        print(describe(document, indent="      "))
+        rubric_parts.append(f"--- {path.name} ---\n{document.text}")
+    if not rubric_parts:
+        print("Nothing readable in the rubric.", file=sys.stderr)
+        return 1
+    rubric_text = "\n\n".join(rubric_parts)
     print()
 
     if submissions_path.is_dir():
@@ -121,7 +142,7 @@ def main():
             continue
 
         result = grading.grade_submission(
-            assignment_name, rubric.text, student_id, "\n\n".join(parts))
+            assignment_name, rubric_text, student_id, "\n\n".join(parts))
         if result["ok"]:
             data = result["data"]
             # The app forces this for a transcript, because the evidence check
