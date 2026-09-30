@@ -295,7 +295,14 @@ For every question, quote the part of the STUDENT'S ANSWER your score is based o
 in an "evidence" field:
 
 - Copy the words VERBATIM from the student's answer. Do not paraphrase, correct,
-  or tidy them. To shorten a long passage, join fragments with " ... ".
+  or tidy them, and do not add joining words: writing "if moved = True THEN
+  A[j+1] <- Key" where the page has those two lines separately is editing, not
+  quoting.
+- QUOTE ONE SHORT CONTIGUOUS SPAN -- the sentence or the two or three lines that
+  earned the marks. At most two fragments joined by " ... ", and only to skip
+  over something in the middle. A quote is a pointer to the evidence, not a
+  summary of the answer: stringing eight fragments together to show everything
+  the student wrote proves nothing and makes the award impossible to check.
 - The field must contain NOTHING BUT the student's words. Do not introduce the
   quote, label it, or describe it. Write `"evidence": "from sklearn.metrics
   import confusion_matrix"`, never `"evidence": "uses the right imports:
@@ -430,6 +437,11 @@ _ESCAPED_WHITESPACE_RE = re.compile(r"\\[nrt]")
 # on quotes that were genuinely present, which is worse than useless -- it
 # trains a faculty member to ignore the flag that catches real fabrication.
 _PUNCTUATION_RE = re.compile(r"[^\w\s]", re.UNICODE)
+# Underscores are DELETED rather than spaced: a reader that writes "nmax" where
+# the page says "n_max" has not misread anything, and failing the whole quote
+# over one character turns a grounding check into noise. Spacing them instead
+# would give "n max", which still would not match.
+_UNDERSCORE_RE = re.compile(r"_")
 # Parenthetical asides, which models skip over when quoting.
 _PARENTHETICAL_RE = re.compile(r"\([^()]{0,200}\)")
 
@@ -438,6 +450,7 @@ def _normalise(text):
     """Fold away everything that can differ without the words differing."""
     # NFKC first so typographic characters decompose to their plain forms.
     text = unicodedata.normalize("NFKC", text or "")
+    text = _UNDERSCORE_RE.sub("", text)
     text = _PUNCTUATION_RE.sub(" ", text)
     return _WHITESPACE_RE.sub(" ", text).strip().lower()
 

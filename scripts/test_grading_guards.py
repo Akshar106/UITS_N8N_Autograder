@@ -217,6 +217,31 @@ def test_adjudication():
           grade([response(GOOD)], passes=1)["data"]["passes"] == 1)
 
 
+def test_quote_normalisation():
+    """Cases taken from a real handwritten submission's flagged quotes."""
+    from app.grading import _normalise
+
+    print("\n-- what counts as the same words --")
+
+    def contains(quote, source):
+        return _normalise(quote) in _normalise(source)
+
+    # Cosmetic: the reader dropped an underscore the page has.
+    check("n_max and nmax are the same words",
+          contains("nmax = 7, rounded = 7.966", "[box: n_max = 7], rounded = 7.966"))
+    check("an identifier with underscores still matches itself",
+          contains("modified_insertion_sort(A, n)", "def modified_insertion_sort(A, n):"))
+    check("punctuation and case still fold",
+          contains("THE RUNNING TIME IS O(N^2)", "the running time is O(n^2)."))
+
+    # Not cosmetic: the model added a word the student did not write.
+    check("a word inserted into the quote is still caught",
+          not contains("if moved = True then A[j+1] <- Key",
+                       "if moved = True\n    A[j+1] <- Key"))
+    check("a quote of something absent is still caught",
+          not contains("the algorithm is O(n log n)", "the running time is O(n^2)"))
+
+
 def test_all_or_nothing_rubric():
     print("\n-- an all-or-nothing Canvas rubric admits no midpoints --")
 
@@ -750,6 +775,12 @@ def test_prompt_guards():
           "SCORING RUBRIC section wins" in prompt)
     check("the prompt demands verbatim quotes from the student",
           "VERBATIM" in prompt and "evidence" in prompt)
+    check("the prompt asks for one short contiguous span, not a summary",
+          "QUOTE ONE SHORT CONTIGUOUS SPAN" in prompt
+          and "At most two fragments" in prompt
+          and "proves nothing and makes the award impossible to check" in flat)
+    check("the prompt forbids inventing joining words",
+          "do not add joining words" in flat)
     check("the prompt forbids quoting the rubric or solutions as the student's words",
           "any published solutions are NOT the student's" in flat)
     check("the prompt forbids quoting text the student did not write",
@@ -798,6 +829,7 @@ def main():
     test_impossible_scores()
     test_ceiling()
     test_adjudication()
+    test_quote_normalisation()
     test_all_or_nothing_rubric()
     test_rubric_coverage()
     test_retries()
