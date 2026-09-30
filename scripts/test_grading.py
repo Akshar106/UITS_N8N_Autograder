@@ -135,8 +135,16 @@ def main():
                "extraction_notes": "\n".join(notes) or None,
                "ai_score": None, "ai_total": None, "ai_feedback": None}
 
+        # Same rule as the app: a file that failed entirely means the grade
+        # would cover unknown scope, so there is no honest score to report.
+        if failures:
+            row["ai_error"] = ("Part of this submission could not be read, so it was "
+                               "not graded: " + " ".join(failures))
+            print(f"  -> NOT GRADED: {row['ai_error']}\n")
+            results.append(row)
+            continue
         if not parts:
-            row["ai_error"] = " ".join(failures) or "nothing could be read"
+            row["ai_error"] = "nothing could be read"
             print(f"  -> not graded: {row['ai_error']}\n")
             results.append(row)
             continue

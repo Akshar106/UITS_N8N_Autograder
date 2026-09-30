@@ -62,7 +62,16 @@ LOW_CONFIDENCE = float(os.getenv("OCR_LOW_CONFIDENCE", "0.75"))
 # reasonable for a whole roster.
 MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "20"))
 
-REQUEST_TIMEOUT = int(os.getenv("OCR_TIMEOUT", "120"))
+# A 31B model reading a dense page of handwriting is slow, and 120s was not
+# enough: a real submission timed out on page 2 of 11. Transcription is already
+# a background job, so waiting is far cheaper than losing the page.
+REQUEST_TIMEOUT = int(os.getenv("OCR_TIMEOUT", "240"))
+
+# One slow page should not cost a student their whole submission. The LLM client
+# has retried transient failures since the beginning; the image reader did not,
+# so a single read timeout discarded eleven pages of work.
+MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "3"))
+BACKOFF_SECONDS = float(os.getenv("OCR_BACKOFF_SECONDS", "3"))
 
 
 class OCRError(Exception):
@@ -181,13 +190,33 @@ def read_pages(images, context=""):
     reader = _read_page_vision if BACKEND == "vision" else _read_page_azure
     pages = []
     for index, image in enumerate(images, start=1):
+        pages.append(_read_with_retries(reader, image, index, context))
+    return pages
+
+
+def _read_with_retries(reader, image, index, context):
+    """Read one page, retrying the failures that are usually transient.
+
+    A timeout or a dropped connection on one page is not a verdict on the
+    submission, and without this the first slow page throws the other ten away.
+    An OCRError is not retried: it means the reader answered and could not do
+    the job, which a second identical request will not change.
+    """
+    last_error = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            pages.append(reader(image, index, context))
+            return reader(image, index, context)
         except OCRError:
             raise
         except requests.RequestException as exc:
-            raise OCRError(f"Could not reach the image reader on page {index}: {exc}") from exc
-    return pages
+            last_error = exc
+            logger.warning("Page %d transcription attempt %d/%d failed: %s",
+                           index, attempt, MAX_ATTEMPTS, exc)
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(BACKOFF_SECONDS * (2 ** (attempt - 1)))
+    raise OCRError(
+        f"Could not reach the image reader for page {index} after "
+        f"{MAX_ATTEMPTS} attempts: {last_error}")
 
 
 # --- the ReaLLM gateway, with a vision-capable model --------------------------

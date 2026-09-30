@@ -309,6 +309,10 @@ in an "evidence" field:
   question. If they attempted it and got it wrong, quote the attempt.
 - NEVER quote text that is not in the student's answer. If you cannot find
   supporting words in the answer, you cannot award the points.
+- The rubric, the assignment and any published solutions are NOT the student's
+  answer. Quoting them as evidence claims the student wrote what the marking
+  scheme says, which is the one mistake that makes a fabricated award look
+  perfectly justified. Quote only what is under STUDENT'S ANSWER.
 - In a "missing" field, state what the rubric required that the answer does not
   contain. Use "" when nothing is missing.
 

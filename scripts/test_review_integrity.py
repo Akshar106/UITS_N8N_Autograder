@@ -230,6 +230,61 @@ def test_audit_fixes():
           callable(getattr(auth_utils, "access_token_for", None)))
 
 
+def test_partial_submission_is_refused():
+    """A file that failed to read must not become a partial grade.
+
+    Observed for real: a handwritten PDF timed out during transcription while
+    the two code files beside it read fine, and the submission came back
+    19.5/100 saying problems 3-5 were not attempted -- for work the student had
+    done. A grade over unknown scope is worse than no grade.
+    """
+    from unittest import mock
+    from app import extract
+    from app.routes.rubric import _extract_submission_text
+
+    print("\n-- an unreadable attachment refuses the whole submission --")
+
+    submission = {"attachments": [
+        {"filename": "handwritten.pdf", "url": "https://canvas/1"},
+        {"filename": "problem1.py", "url": "https://canvas/2"},
+    ]}
+
+    def download(url, token=None):
+        return b"x" if url.endswith("1") else b"def my_sort(A):\n    return A\n"
+
+    def extract_document(filename, content, assignment_name=""):
+        if filename.endswith(".pdf"):
+            raise extract.ExtractionError("transcribing its pages failed: read timed out")
+        document = extract.Extracted()
+        document.text = content.decode()
+        return document
+
+    with mock.patch("app.canvas_client.download_attachment", side_effect=download), \
+         mock.patch("app.extract.extract_document", side_effect=extract_document):
+        text, filenames, error, notes, _ocr = _extract_submission_text(submission, "tok")
+
+    check("no text is handed to the grader", text is None)
+    check("the row carries an error instead of a score", bool(error))
+    check("the error names what could not be read", "handwritten.pdf" in error)
+    check("the error says the submission was not graded", "not graded" in error)
+    check("the readable file is still named for the faculty member",
+          "problem1.py" in (filenames or ""))
+
+    # The other direction must still work: warnings are not failures.
+    def extract_with_warning(filename, content, assignment_name=""):
+        document = extract.Extracted()
+        document.text = content.decode()
+        document.notes.append("1 image could not be read")
+        return document
+
+    with mock.patch("app.canvas_client.download_attachment", side_effect=download), \
+         mock.patch("app.extract.extract_document", side_effect=extract_with_warning):
+        text, _f, error, notes, _ocr = _extract_submission_text(submission, "tok")
+    check("a file read WITH WARNINGS is still graded", text is not None and error is None)
+    check("the warning still reaches the faculty member",
+          any("image could not be read" in n for n in notes))
+
+
 def test_canvas_rubric():
     from app import canvas_rubric
     from app.routes.rubric import _combine_rubric_sources
@@ -543,6 +598,7 @@ def main():
     test_triage_ordering()
     test_anchor_pipeline()
     test_audit_fixes()
+    test_partial_submission_is_refused()
     test_canvas_rubric()
     test_upgrade_from_existing_database()
     test_stale_row_prefill()

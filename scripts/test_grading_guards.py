@@ -750,6 +750,8 @@ def test_prompt_guards():
           "SCORING RUBRIC section wins" in prompt)
     check("the prompt demands verbatim quotes from the student",
           "VERBATIM" in prompt and "evidence" in prompt)
+    check("the prompt forbids quoting the rubric or solutions as the student's words",
+          "any published solutions are NOT the student's" in flat)
     check("the prompt forbids quoting text the student did not write",
           "NEVER quote text that is not in the student's answer" in prompt)
     check("the prompt separates what the rubric decides from what the model decides",

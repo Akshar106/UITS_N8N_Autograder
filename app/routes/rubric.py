@@ -327,10 +327,20 @@ def _extract_submission_text(submission, access_token, assignment_name=""):
             reason = " ".join(problems) or "No text could be extracted from the submitted file(s)."
             return None, ", ".join(a.get("filename", "file") for a in attachments), reason, notes, from_ocr
 
-        # One unreadable file among several is not a failure, but the grade is
-        # then based on part of the work -- which the faculty member has to know.
+        # A file that could not be read AT ALL is different from one read with
+        # warnings, and conflating them produced a real wrong grade: a
+        # handwritten PDF timed out during transcription, the two code files
+        # beside it graded fine, and the student got 19.5/100 with "problems 3-5
+        # were not attempted" -- for work they had done. A missing document
+        # means the grade covers unknown scope, so there is no honest score to
+        # report and the row goes back as an error naming the file.
         if problems:
             notes.extend(problems)
+            return (None, ", ".join(filenames) or ", ".join(
+                        a.get("filename", "file") for a in attachments),
+                    "Part of this submission could not be read, so it was not graded: "
+                    + " ".join(problems),
+                    notes, from_ocr)
 
         # A file that visibly holds content we could not read is refused rather
         # than graded: an invented zero on correct work is the worst outcome
