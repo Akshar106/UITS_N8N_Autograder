@@ -682,6 +682,11 @@ def test_transcription_prompt():
           "Be CONSISTENT across pages" in prompt)
     check("it keeps the student's notation rather than normalising it",
           'If they wrote "lg", write "lg", not "log"' in flat)
+    check("it handles a submission that is a figure rather than a page",
+          "SOME SUBMISSIONS ARE A FIGURE, NOT A PAGE OF WRITING" in prompt
+          and "the title, the axis labels" in flat)
+    check("it will not read values off an axis it cannot measure",
+          "Do not estimate precise values off an axis" in flat)
     check("it describes diagrams rather than interpreting them",
           "[diagram:" in prompt and "Do not interpret whether it is correct" in flat)
 

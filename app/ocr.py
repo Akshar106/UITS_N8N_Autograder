@@ -122,6 +122,13 @@ DESCRIBE WHAT IS NOT TEXT.
 - A diagram, drawing, tree, graph or plot cannot be transcribed. Write
   [diagram: a short factual description of what is drawn], describing only what
   is actually there. Do not interpret whether it is correct.
+- SOME SUBMISSIONS ARE A FIGURE, NOT A PAGE OF WRITING -- an exported chart, a
+  screenshot, a photographed diagram. Describe it the same way, and be
+  specific about the things a grader has to check: the title, the axis labels
+  and their units, how many bars or series there are and what each is labelled,
+  and the rough shape of the result (which is largest, whether one is near
+  zero). Transcribe any text that appears in the image exactly. Do not estimate
+  precise values off an axis and do not say whether the result looks right.
 
 WRITE PLAIN TEXT, NOT MARKUP.
 
