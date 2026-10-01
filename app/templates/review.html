@@ -13,7 +13,8 @@
       Grading appears to have stopped unexpectedly &mdash; no progress for over
       {{ (stale_after / 60)|round|int }} minutes, which usually means the server restarted partway through.
       It stopped at {{ job.done }} of {{ job.total }} submissions{% if job.message %}, while {{ job.message[0]|lower }}{{ job.message[1:] }}{% endif %}.
-      <a href="{{ url_for('rubric.upload_rubric', course_id=course_id, assignment_id=assignment_id) }}">Go back and click "Grade all submissions" again</a> to pick up where it left off.
+      <a href="{{ url_for('rubric.upload_rubric', course_id=course_id, assignment_id=assignment_id) }}">Go back and click "Grade all submissions" again</a>
+      &mdash; pages already read are kept, so it resumes rather than starting over.
     </div>
   {% elif job and job.status == 'running' %}
     <div class="flash flash-success">

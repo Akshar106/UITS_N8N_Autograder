@@ -41,6 +41,7 @@ Backends, chosen with OCR_BACKEND:
           before enabling it.
 """
 import base64
+import hashlib
 import itertools
 import logging
 import re
@@ -185,7 +186,18 @@ class PageText:
         return self.text.count("[illegible]") + self.text.count("[?")
 
 
-def read_pages(images, context="", progress=None):
+def _cache_key(image):
+    """Identify a page by its pixels and the model that will read it.
+
+    The model is part of the key: the same page read by a different
+    transcriber is a different transcript, and serving the old one would
+    silently undo a deliberate change of reader.
+    """
+    digest = hashlib.sha256(image).hexdigest()
+    return f"{BACKEND}:{VISION_MODEL or '-'}:{digest}"
+
+
+def read_pages(images, context="", progress=None, cache=None):
     """Transcribe page images. Returns [PageText]; raises OCRError if it cannot.
 
     `images` is a list of raw image bytes, in page order. `context` is a short
@@ -195,6 +207,10 @@ def read_pages(images, context="", progress=None):
     `progress(done, total)` is called as each page lands. A submission can take
     minutes, and without it the only thing anyone can see is that nothing has
     happened yet -- which is indistinguishable from a crash.
+
+    `cache`, when given, is an object with get(key) and set(key, text). Pages
+    already transcribed are not read again, which is what lets a run that was
+    killed part way resume instead of starting over.
     """
     if not is_enabled():
         raise OCRError(
@@ -218,7 +234,19 @@ def read_pages(images, context="", progress=None):
 
     def read_one(pair):
         index, image = pair
+        key = _cache_key(image) if cache else None
+        if key:
+            cached = cache.get(key)
+            if cached is not None:
+                logger.info("Page %d already transcribed; reusing it", index)
+                if progress:
+                    with lock:
+                        progress(next(done), total)
+                return PageText(index, cached)
+
         page = _read_with_retries(reader, image, index, context)
+        if key:
+            cache.set(key, page.text)
         if progress:
             with lock:
                 progress(next(done), total)

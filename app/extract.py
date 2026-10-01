@@ -129,7 +129,7 @@ def _ext(filename):
     return (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
 
 
-def extract_document(filename, content_bytes, assignment_name="", progress=None):
+def extract_document(filename, content_bytes, assignment_name="", progress=None, cache=None):
     """Read a submission. Raises ExtractionError when nothing usable came out.
 
     assignment_name is passed to the image reader as context only -- it helps a
@@ -159,11 +159,11 @@ def extract_document(filename, content_bytes, assignment_name="", progress=None)
         raise ExtractionError("The file is empty.")
 
     if ext in IMAGE_EXTENSIONS:
-        result = _read_image(content_bytes, assignment_name, progress)
+        result = _read_image(content_bytes, assignment_name, progress, cache)
     else:
         reader = {"pdf": _read_pdf, "docx": _read_docx, "txt": _read_txt,
                   "ipynb": _read_ipynb, "py": _read_txt}[ext]
-        result = (reader(content_bytes, assignment_name, progress) if ext == "pdf"
+        result = (reader(content_bytes, assignment_name, progress, cache) if ext == "pdf"
                   else reader(content_bytes))
     result.text = _tidy(result.text)
     result.stats["chars"] = result.chars
@@ -376,10 +376,10 @@ def _read_docx(content_bytes):
 
 # --- .pdf ---------------------------------------------------------------------
 
-def _transcribe(images, assignment_name, source, progress=None):
+def _transcribe(images, assignment_name, source, progress=None, cache=None):
     """Shared path for anything whose text only exists as pixels."""
     result = Extracted()
-    pages = ocr.read_pages(images, context=assignment_name, progress=progress)
+    pages = ocr.read_pages(images, context=assignment_name, progress=progress, cache=cache)
     if not any(page.text.strip() for page in pages):
         # Checked on the pages, not on the rendered transcript: the "--- page N
         # ---" headers are ours, so a transcript of nothing is still non-empty
@@ -399,10 +399,10 @@ def _transcribe(images, assignment_name, source, progress=None):
     return result
 
 
-def _read_image(content_bytes, assignment_name="", progress=None):
+def _read_image(content_bytes, assignment_name="", progress=None, cache=None):
     """A photograph or scan of a single page."""
     try:
-        return _transcribe([content_bytes], assignment_name, "image", progress)
+        return _transcribe([content_bytes], assignment_name, "image", progress, cache)
     except ocr.OCRError as exc:
         raise ExtractionError(str(exc)) from exc
 
@@ -430,7 +430,7 @@ def _render_pdf_pages(content_bytes):
     return images
 
 
-def _read_pdf(content_bytes, assignment_name="", progress=None):
+def _read_pdf(content_bytes, assignment_name="", progress=None, cache=None):
     result = Extracted()
     try:
         with pdfplumber.open(io.BytesIO(content_bytes)) as pdf:
@@ -473,7 +473,7 @@ def _read_pdf(content_bytes, assignment_name="", progress=None):
         if ocr.is_enabled():
             try:
                 transcribed = _transcribe(
-                    _render_pdf_pages(content_bytes), assignment_name, "pdf-scan", progress)
+                    _render_pdf_pages(content_bytes), assignment_name, "pdf-scan", progress, cache)
             except ocr.OCRError as exc:
                 result.stats["incomplete"] = True
                 result.notes.append(

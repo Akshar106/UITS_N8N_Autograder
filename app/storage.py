@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS rubrics (
     PRIMARY KEY (iu_user_id, course_id, assignment_id)
 );
 
+CREATE TABLE IF NOT EXISTS page_transcripts (
+    cache_key TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    created_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS grading_jobs (
     iu_user_id TEXT NOT NULL,
     course_id TEXT NOT NULL,
@@ -401,6 +407,38 @@ def increment_grading_progress(iu_user_id, course_id, assignment_id):
         WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ?
         """,
         (_now(), iu_user_id, course_id, assignment_id),
+    )
+    db.commit()
+
+
+# --- transcribed pages -------------------------------------------------------
+#
+# Transcription is the slowest thing this app does and the only part that can
+# be repeated verbatim: the same image read by the same model gives the same
+# text. Caching it is what makes "click Grade again to pick up where it left
+# off" true rather than a promise -- without it a run killed on page 9 of 11
+# starts again at page 1.
+#
+# Keyed by the content of the page and the model that read it, so a different
+# model or an edited page is a different entry and nothing stale is served.
+# Not owner-scoped: the key IS the content, so there is nothing to leak that
+# the holder of the identical bytes does not already have.
+
+def get_cached_page(cache_key):
+    row = get_db().execute(
+        "SELECT text FROM page_transcripts WHERE cache_key = ?", (cache_key,)
+    ).fetchone()
+    return row["text"] if row else None
+
+
+def save_cached_page(cache_key, text):
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO page_transcripts (cache_key, text, created_at) VALUES (?, ?, ?)
+        ON CONFLICT(cache_key) DO UPDATE SET text = excluded.text, created_at = excluded.created_at
+        """,
+        (cache_key, text, _now()),
     )
     db.commit()
 

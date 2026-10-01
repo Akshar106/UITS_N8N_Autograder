@@ -654,6 +654,77 @@ def test_pages_are_transcribed_in_parallel():
         _restore()
 
 
+def test_transcription_resumes_after_a_kill():
+    """A run killed part way must not start over.
+
+    The review page already tells the user to click Grade again "to pick up
+    where it left off". Without a page cache that is false: every retry
+    re-reads every page, which on this gateway is minutes per attempt and is
+    why a job that keeps dying never finishes.
+    """
+    import importlib
+    from unittest import mock
+    import app.ocr
+
+    print("\n-- a killed run resumes from the pages already read --")
+    os.environ["OCR_BACKEND"] = "vision"
+    importlib.reload(app.ocr)
+    o = app.ocr
+    try:
+        store = {}
+
+        class Cache:
+            @staticmethod
+            def get(key):
+                return store.get(key)
+
+            @staticmethod
+            def set(key, text):
+                store[key] = text
+
+        read = []
+
+        def reader(image, index, context):
+            read.append(index)
+            return o.PageText(index, f"text {index}")
+
+        images = [bytes([i]) * 50 for i in range(1, 6)]
+        with mock.patch.object(o, "_read_page_vision", side_effect=reader):
+            first = o.read_pages(images, "ctx", cache=Cache)
+            check("a first run reads every page", sorted(read) == [1, 2, 3, 4, 5])
+            check("every page is cached", len(store) == 5)
+
+            read.clear()
+            second = o.read_pages(images, "ctx", cache=Cache)
+            check("a repeat run reads nothing again", read == [])
+            check("the resumed text is identical",
+                  [p.text for p in first] == [p.text for p in second])
+
+            # The case that matters: killed after three pages.
+            store.clear()
+            read.clear()
+            for image in images[:3]:
+                store[o._cache_key(image)] = "already read"
+            resumed = o.read_pages(images, "ctx", cache=Cache)
+            check("only the unread pages are read again", sorted(read) == [4, 5])
+            check("cached pages keep their place in page order",
+                  [p.index for p in resumed] == [1, 2, 3, 4, 5]
+                  and resumed[0].text == "already read")
+
+            # Progress must still count cached pages, or the UI goes backwards.
+            seen = []
+            o.read_pages(images, "ctx", progress=lambda d, t: seen.append(d), cache=Cache)
+            check("progress counts cached pages too", seen == [1, 2, 3, 4, 5])
+
+        # Changing the reader must invalidate, not silently serve the old text.
+        key_before = o._cache_key(images[0])
+        o.VISION_MODEL = "some-other-model"
+        check("a different model is a different cache entry",
+              o._cache_key(images[0]) != key_before)
+    finally:
+        _restore()
+
+
 def test_transcription_prompt():
     print("\n-- the transcription prompt defends against a helpful reader --")
     from app import ocr as o
@@ -750,6 +821,7 @@ def main():
     test_handwriting_transcription()
     test_vision_gateway_shape()
     test_pages_are_transcribed_in_parallel()
+    test_transcription_resumes_after_a_kill()
     test_transcription_prompt()
     test_refusals()
     test_text_entry()

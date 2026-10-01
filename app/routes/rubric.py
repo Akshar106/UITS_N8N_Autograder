@@ -328,6 +328,18 @@ def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, ac
     return grading.select_anchor_examples(candidates)
 
 
+class _TranscriptCache:
+    """Storage-backed page cache, so a killed run resumes rather than restarts."""
+
+    @staticmethod
+    def get(key):
+        return storage.get_cached_page(key)
+
+    @staticmethod
+    def set(key, text):
+        storage.save_cached_page(key, text)
+
+
 def _extract_submission_text(submission, access_token, assignment_name="", progress=None):
     """Return (text, filenames, error, notes, from_ocr) for one Canvas submission.
 
@@ -354,7 +366,7 @@ def _extract_submission_text(submission, access_token, assignment_name="", progr
             try:
                 content = canvas_client.download_attachment(attachment["url"], access_token)
                 document = extract.extract_document(filename, content, assignment_name,
-                                                    progress=progress)
+                                                    progress=progress, cache=_TranscriptCache)
             except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
                 problems.append(f"[Could not read {filename}: {exc}]")
                 continue
