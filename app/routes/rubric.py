@@ -221,7 +221,8 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
         # generic reading of the rubric. Empty on a first run, which is fine --
         # grading then works exactly as it did before.
         anchors = _build_anchor_examples(
-            iu_user_id, course_id, assignment_id, submissions, access_token
+            iu_user_id, course_id, assignment_id, submissions, access_token,
+            cache=page_cache,
         )
         if anchors:
             current_app.logger.info(
@@ -364,33 +365,43 @@ def _grade_submission_row(app, iu_user_id, course_id, assignment_id, rubric, sub
     )
 
 
-def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, access_token):
+def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, access_token,
+                           cache=None):
     """Pair the faculty member's own settled grades with the text they graded.
 
     The submission text is deliberately not kept in the database -- it is student
     work, and the less of it stored the better -- so it is re-extracted here from
     the same Canvas fetch the run is already working through.
+
+    Which submissions to read is decided BEFORE reading them. This used to
+    extract every approved submission and then keep three, which on a
+    handwritten assignment meant re-transcribing the whole approved set from
+    scratch on every run, before the first new grade appeared. The page cache
+    is passed through for the same reason: an anchor read last run should not
+    be read again from the gateway this run.
     """
     reviewed = storage.list_reviewed_student_ids(iu_user_id, course_id, assignment_id)
     if not reviewed:
         return []
 
     by_student = {str(s["user_id"]): s for s in submissions if s.get("user_id") is not None}
-    candidates = []
-    for row in reviewed:
-        submission = by_student.get(str(row["student_id"]))
-        if submission is None:
-            continue  # graded earlier but no longer in this fetch
-        text, _filename, error, _notes, _ocr = _extract_submission_text(submission, access_token)
-        if error or not text:
-            continue
-        candidates.append({
-            "score": row["faculty_score"],
-            "feedback": row["faculty_feedback"],
-            "text": text,
-        })
+    chosen = grading.select_anchor_examples(
+        [{"score": row["faculty_score"], "feedback": row["faculty_feedback"],
+          "student_id": row["student_id"]}
+         for row in reviewed if str(row["student_id"]) in by_student],
+        require_text=False,
+    )
 
-    return grading.select_anchor_examples(candidates)
+    candidates = []
+    for row in chosen:
+        submission = by_student[str(row["student_id"])]
+        text, _filename, error, _notes, _ocr = _extract_submission_text(
+            submission, access_token, cache=cache)
+        if error or not text:
+            continue  # an anchor we cannot read is simply one fewer anchor
+        candidates.append({"score": row["score"], "feedback": row["feedback"], "text": text})
+
+    return candidates
 
 
 class _TranscriptCache:
@@ -485,7 +496,21 @@ def _extract_submission_text(submission, access_token, assignment_name="", progr
     if body and extract.strip_html(body):
         return extract.strip_html(body), None, None, [], False
 
-    return None, None, "No file attachment or text entry found for this submission.", []
+    # Five values, like every other path out of this function. It returned four
+    # here, and the caller unpacks five, so reaching this line raised
+    # ValueError. It is not an unlikely line to reach: a link submission, an
+    # on-paper assignment, or a student who submitted and then deleted the file
+    # all land here. Before grading ran concurrently this took the whole roster
+    # down with it.
+    kind = submission.get("submission_type")
+    if kind == "online_url" and submission.get("url"):
+        reason = (f"This submission is a link ({submission['url']}), not a file. "
+                  f"Open it yourself, or ask for the work as an uploaded file.")
+    elif kind == "on_paper":
+        reason = "This assignment is marked as submitted on paper, so there is nothing to read."
+    else:
+        reason = "No file attachment or text entry found for this submission."
+    return None, None, reason, [], False
 
 
 def _dump_breakdown(breakdown):

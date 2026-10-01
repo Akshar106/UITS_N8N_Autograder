@@ -52,17 +52,46 @@ FIVE_CRITERIA = [{"description": f"Q{i}", "points": 10.0} for i in range(1, 6)]
 GOOD = [(10.0, 10.0), (7.0, 10.0), (4.0, 10.0), (0.0, 10.0), (10.0, 10.0)]
 
 
-def grade(raw_responses, student_text="answer", **kwargs):
+def grade(raw_responses, student_text="answer", per_pass=None, **kwargs):
     """Run grade_submission against a scripted sequence of model replies.
 
     Single-pass unless the caller asks otherwise, so each guard is exercised on
     one response rather than on a merge of two.
+
+    `per_pass` gives each concurrent pass its OWN reply script, and
+    `raw_responses` is then the tail used by anything sequential that follows,
+    such as the structural tie-breaker. One shared queue is enough only while
+    the replies are interchangeable: the passes run at the same time, so with
+    retries in play a flat list silently depends on which thread pops first,
+    and "three bad replies then a good one" could feed the good one to the
+    pass that was going to succeed anyway.
     """
+    import threading
+
     from app import grading
 
     kwargs.setdefault("passes", 1)
-    replies = list(raw_responses)
-    with mock.patch.object(grading, "call_reallm", side_effect=lambda *a: replies.pop(0)):
+    tail = list(raw_responses)
+    queues = [list(q) for q in (per_pass or [])]
+    claimed = {}
+    lock = threading.Lock()
+
+    def reply(*_args):
+        # A thread claims the next script and keeps it until that script runs
+        # out, then claims another. Not one script per thread: a pool of two
+        # workers can still run both passes on the SAME thread when the first
+        # finishes before the second is scheduled, and keying on the thread
+        # made the test fail roughly half the time.
+        with lock:
+            thread = threading.current_thread().name
+            mine = claimed.get(thread)
+            if not mine:
+                if not queues:
+                    return tail.pop(0)
+                mine = claimed[thread] = queues.pop(0)
+            return mine.pop(0)
+
+    with mock.patch.object(grading, "call_reallm", side_effect=reply):
         return grading.grade_submission("DSA", "rubric", "1", student_text, **kwargs)
 
 
@@ -178,7 +207,10 @@ def test_adjudication():
     # A pass that fails validation must not drag the submission down with it.
     bad = response([(99.0, 10.0)])
     good = response([(10.0, 10.0), (6.0, 10.0)])
-    result = grade([bad, bad, bad, good], passes=2)
+    # Scripted per pass, not as one queue: the passes run concurrently, so a
+    # flat list would hand the good reply to whichever thread happened to be
+    # on its third retry first.
+    result = grade([], per_pass=[[bad, bad, bad], [good]], passes=2)
     check("one failed pass falls back to the one that worked", result["ok"])
     check("a single usable pass reports no disagreement",
           result["data"]["max_disagreement"] == 0.0)
@@ -528,6 +560,20 @@ def test_anchor_examples():
     check("rows with no text are skipped",
           grading.select_anchor_examples([{"score": 10.0, "text": "   "}]) == [])
 
+    # Selecting on the score alone is what lets the caller decide WHICH
+    # submissions to read before paying to read them. Reading fifty to keep
+    # three was most of a run's dead time, and on handwritten work it meant
+    # re-transcribing the whole approved set before the first new grade.
+    scores_only = [{"score": float(i), "student_id": str(i)} for i in range(50)]
+    cheap = grading.select_anchor_examples(scores_only, limit=3, require_text=False)
+    check("selection without text returns the limit", len(cheap) == 3)
+    check("selection without text still spans the range",
+          cheap[0]["score"] == 0.0 and cheap[-1]["score"] == 49.0)
+    check("selection without text keeps the identity the caller needs",
+          all("student_id" in row for row in cheap))
+    check("requiring text is still the default",
+          grading.select_anchor_examples([{"score": 10.0}]) == [])
+
     rendered = grading.render_anchor_examples(picked, total_points=50)
     check("the rendered block states the instructor's scores",
           "awarded 12 / 50" in rendered and "awarded 47 / 50" in rendered)
@@ -634,6 +680,61 @@ def test_rubric_coverage():
     # Without a Canvas rubric there is nothing to check against, and grading
     # must still work from an uploaded file alone.
     check("no expected criteria means no coverage check", grade([response(GOOD[:3])])["ok"])
+
+
+def test_passes_run_concurrently():
+    """Two independent readings have no reason to wait for each other.
+
+    They ran one after another, which was the whole of a typed submission's
+    grading time: at a realistic 30s per call it made every such submission
+    take a minute instead of half of one, for no result anyone could see.
+    """
+    import threading
+    import time
+
+    from app import grading
+
+    print("\n-- the independent passes are taken at the same time --")
+
+    started, lock = [], threading.Lock()
+
+    def slow_pass(*_args, **_kwargs):
+        with lock:
+            started.append(time.time())
+        time.sleep(0.4)
+        return {"ok": True, "raw": "{}", "error": None, "data": {
+            "score_awarded": 8.0, "total_points": 10.0, "overall_feedback": "f",
+            "confidence": "high",
+            "per_question_breakdown": [{
+                "question_id": "Q1", "max_points": 10.0, "awarded_points": 8.0,
+                "basis": "rubric", "evidence_quote": "x", "comment": "ok",
+                "confidence": "high"}]}}
+
+    original = grading._grade_once
+    try:
+        grading._grade_once = slow_pass
+
+        began = time.time()
+        result = grading.grade_submission("A", "Q1 (10 points)", "1", "ans", passes=2)
+        elapsed = time.time() - began
+        gap = started[1] - started[0]
+
+        check(f"both passes were taken ({len(started)})", len(started) == 2)
+        check(f"the second did not wait for the first ({gap:.2f}s apart)", gap < 0.2)
+        check(f"two passes cost about one pass ({elapsed:.2f}s, not 0.80s)",
+              elapsed < 0.7)
+        check("the merged grade is still correct",
+              result["ok"] and result["data"]["score_awarded"] == 8.0)
+        check("the merge still knows how many passes it had",
+              result["data"].get("passes") == 2)
+
+        # A single pass must not pay for a thread pool it does not need.
+        started.clear()
+        single = grading.grade_submission("A", "Q1 (10 points)", "1", "ans", passes=1)
+        check("one pass still takes exactly one reading", len(started) == 1)
+        check("one pass still grades", single["ok"])
+    finally:
+        grading._grade_once = original
 
 
 def test_retries():
@@ -851,6 +952,7 @@ def main():
     test_quote_normalisation()
     test_all_or_nothing_rubric()
     test_rubric_coverage()
+    test_passes_run_concurrently()
     test_retries()
     test_evidence_verification()
     test_confidence()

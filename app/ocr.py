@@ -85,7 +85,7 @@ CONCURRENCY = max(1, int(os.getenv("OCR_CONCURRENCY", "4")))
 # The default must match GRADING_CONCURRENCY in app/routes/rubric.py, which is
 # the real number of submissions in flight. It is read from the environment
 # here rather than imported because importing the route module from the reader
-# would be a cycle. scripts/test_concurrency.py pins the two together so they
+# would be a cycle. scripts/test_grading_job.py pins the two together so they
 # cannot drift apart silently.
 _SUBMISSIONS_IN_FLIGHT = max(1, int(os.getenv("GRADING_CONCURRENCY", "3")))
 

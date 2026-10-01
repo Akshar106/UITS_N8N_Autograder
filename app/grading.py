@@ -5,6 +5,7 @@ import os
 import re
 import unicodedata
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from app.llm_client import call_reallm
 
@@ -655,15 +656,22 @@ ANCHOR_TEXT_LIMIT = 1500
 MAX_ANCHORS = 3
 
 
-def select_anchor_examples(reviewed, limit=MAX_ANCHORS):
+def select_anchor_examples(reviewed, limit=MAX_ANCHORS, require_text=True):
     """Pick a spread of instructor-graded submissions to calibrate against.
 
     Lowest, highest and middle rather than the first few: the point is to show
     the model the whole range of this instructor's standard, and three
     submissions that all scored well teach it nothing about where marks come off.
+
+    require_text=False selects on the score alone, so a caller can decide WHICH
+    submissions to read before paying to read them. Choosing three out of fifty
+    after extracting all fifty is the same answer for forty-seven times the
+    work, and on handwritten work that work is transcription.
     """
     usable = sorted(
-        (r for r in reviewed if r.get("score") is not None and (r.get("text") or "").strip()),
+        (r for r in reviewed
+         if r.get("score") is not None
+         and (not require_text or (r.get("text") or "").strip())),
         key=lambda r: r["score"],
     )
     if len(usable) <= limit:
@@ -863,7 +871,19 @@ def grade_submission(assignment_name, rubric_text, student_id, student_text,
         return _grade_once(assignment_name, rubric_text, student_id, student_text,
                            expected_criteria, expected_total, anchors)
 
-    results = [read_once() for _ in range(passes)]
+    # The passes are independent by construction -- that is the entire point of
+    # taking more than one -- so running them one after another doubled the time
+    # to grade a typed submission and bought nothing. Peak calls in flight stays
+    # bounded and small: GRADING_CONCURRENCY submissions x this many passes.
+    #
+    # The structural tie-breaker below stays sequential: it only runs when the
+    # passes disagree about the shape of the paper, and it needs their answers
+    # before it knows whether to ask at all.
+    if passes == 1:
+        results = [read_once()]
+    else:
+        with ThreadPoolExecutor(max_workers=passes) as pool:
+            results = list(pool.map(lambda _: read_once(), range(passes)))
     usable = [r for r in results if r["ok"]]
     if not usable:
         return results[-1]

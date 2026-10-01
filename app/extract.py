@@ -420,7 +420,19 @@ def _render_pdf_pages(content_bytes):
     images = []
     document = pypdfium2.PdfDocument(io.BytesIO(content_bytes))
     try:
-        for index in range(min(len(document), ocr.MAX_PAGES)):
+        # Refuse, do not truncate. This used to render the first MAX_PAGES and
+        # stop, which put a partial read BELOW the refuse-on-partial-read check
+        # instead of above it: a 25-page scan was transcribed to page 20, the
+        # note said all 25 pages had been read, nothing was marked incomplete,
+        # and the grader reported the last questions as unattempted. That is
+        # the 19.5/100 failure in a different disguise, and a silent one.
+        if len(document) > ocr.MAX_PAGES:
+            raise ExtractionError(
+                f"This PDF has {len(document)} pages, over the {ocr.MAX_PAGES}-page "
+                f"limit for transcribing scanned work, so it was not graded rather "
+                f"than graded in part. Raise OCR_MAX_PAGES to allow it."
+            )
+        for index in range(len(document)):
             page = document[index].render(scale=PDF_RENDER_DPI / 72).to_pil().convert("L")
             buffer = io.BytesIO()
             page.save(buffer, format="JPEG", quality=PDF_RENDER_QUALITY, optimize=True)

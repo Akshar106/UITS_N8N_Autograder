@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Guards the two concurrency rules a roster depends on.
+"""Guards the background grading job: its concurrency rules and its contracts.
 
 No Canvas, no LLM and no network -- real threads, real SQLite, stubbed edges:
 
-    python3 scripts/test_concurrency.py
+    python3 scripts/test_grading_job.py
 
 Grading several submissions at once is the difference between a class of a
 hundred taking minutes and taking an hour, but both times this code path has
@@ -417,7 +417,113 @@ def test_transcribed_rows_are_still_forced_to_human_review():
           passes_seen.count(None) == 2)
 
 
+def test_every_extraction_path_returns_the_same_shape():
+    """A submission with no file and no text used to raise ValueError.
+
+    One return out of six carried four values where the caller unpacks five.
+    It is not an obscure path: a link submission, an on-paper assignment, and
+    a student who submitted and then deleted the file all reach it. Before
+    grading ran concurrently, one such student took the whole roster down.
+
+    The arity is checked across every path rather than only the one that was
+    wrong, because the next edit is as likely to break a different one.
+    """
+    import ast
+    import inspect
+
+    from app.routes import rubric as rubric_module
+
+    print("\n-- every way out of extraction returns the same number of values --")
+
+    source = inspect.getsource(rubric_module._extract_submission_text)
+    tree = ast.parse(source.lstrip())
+    arities = {len(node.value.elts) for node in ast.walk(tree)
+               if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple)}
+    check(f"all tuple returns agree on arity (found {sorted(arities)})",
+          arities == {5})
+
+    # And the behaviour, not just the shape.
+    cases = [
+        ("a link submission", {"submission_type": "online_url",
+                               "url": "https://github.com/a/b"}, "link"),
+        ("an on-paper assignment", {"submission_type": "on_paper"}, "on paper"),
+        ("an empty submission", {}, "No file attachment"),
+    ]
+    for label, extra, expected in cases:
+        submission = {"user_id": 1, "user": {"name": "A"},
+                      "attachments": [], "body": None, **extra}
+        try:
+            text, _name, error, notes, from_ocr = \
+                rubric_module._extract_submission_text(submission, "token")
+        except ValueError as exc:
+            check(f"{label} does not crash the caller", False)
+            print(f"      {exc}")
+            continue
+        check(f"{label} does not crash the caller", True)
+        check(f"{label} explains itself ({expected})", expected in (error or ""))
+        check(f"{label} yields no text to grade", text is None)
+        check(f"{label} is not reported as transcribed", from_ocr is False)
+
+
+def test_anchors_are_chosen_before_they_are_read():
+    """Reading fifty approved submissions to keep three is most of a run.
+
+    The waste was invisible on typed work and enormous on handwritten work,
+    where every approved anchor was re-transcribed from the gateway on every
+    run -- all of it before the first new grade appeared.
+    """
+    from app import grading, storage
+    from app.routes import rubric as rubric_module
+
+    print("\n-- calibration reads only the submissions it will actually use --")
+    app = make_app()
+
+    approved = 50
+    with app.app_context():
+        for i in range(approved):
+            storage.upsert_graded_submission(
+                OWNER, COURSE, ASSIGNMENT, "N", str(i), f"S{i}", "f.pdf",
+                float(i), 50.0, "ai", None)
+            rows = {r["student_id"]: r for r in
+                    storage.list_submissions(OWNER, COURSE, ASSIGNMENT)}
+            storage.save_faculty_review(OWNER, rows[str(i)]["id"], float(i), "ok", True)
+
+    submissions = [
+        {"user_id": i, "user": {"name": f"S{i}"},
+         "attachments": [{"filename": "f.pdf", "url": "u"}]}
+        for i in range(approved)
+    ]
+
+    read, caches = [], []
+
+    def fake_extract(submission, token, name="", progress=None, cache=None):
+        read.append(submission["user_id"])
+        caches.append(cache)
+        return (f"text {submission['user_id']}", "f.pdf", None, [], False)
+
+    original = rubric_module._extract_submission_text
+    try:
+        rubric_module._extract_submission_text = fake_extract
+        sentinel = object()
+        with app.app_context():
+            anchors = rubric_module._build_anchor_examples(
+                OWNER, COURSE, ASSIGNMENT, submissions, "token", cache=sentinel)
+    finally:
+        rubric_module._extract_submission_text = original
+
+    check(f"only the chosen anchors are read ({len(read)} of {approved})",
+          len(read) == grading.MAX_ANCHORS)
+    check("the anchors still span the instructor's range",
+          [a["score"] for a in anchors] == [0.0, 24.0, 49.0])
+    check("the transcript cache is passed through to them",
+          caches and all(c is sentinel for c in caches))
+    check("each anchor carries the text that was read",
+          all(a["text"] for a in anchors))
+
+
 def main():
+    test_every_extraction_path_returns_the_same_shape()
+    test_anchors_are_chosen_before_they_are_read()
     test_pool_threads_have_an_application_context()
     test_one_bad_submission_does_not_take_the_roster()
     test_the_gateway_ceiling_is_a_ceiling_not_a_queue()

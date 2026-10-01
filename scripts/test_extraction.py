@@ -762,6 +762,56 @@ def test_transcription_prompt():
           "[diagram:" in prompt and "Do not interpret whether it is correct" in flat)
 
 
+def test_long_scan_is_refused_not_truncated():
+    """A scan over the page limit must be refused, never partly transcribed.
+
+    _render_pdf_pages used to rasterise the first MAX_PAGES and stop. That put
+    a partial read BELOW the refuse-on-partial-read check instead of above it:
+    a 25-page submission was transcribed to page 20, the note said all 25 pages
+    had been read, nothing was marked incomplete, and the grader reported the
+    last questions as unattempted. The 19.5/100 failure in a new disguise, and
+    a silent one -- so this test counts the pages actually read, not just the
+    error.
+    """
+    print("\n-- a scan over the page limit is refused, not silently cut short --")
+    ocr, ex, _patch = _with_backend("vision", TRANSCRIPT)
+    try:
+        from unittest import mock
+
+        limit = ocr.MAX_PAGES
+        read = []
+
+        def counting_reader(image, index, context):
+            read.append(index)
+            return ocr.PageText(index, TRANSCRIPT)
+
+        with mock.patch.object(ocr, "_read_page_vision", side_effect=counting_reader):
+            try:
+                ex.extract_document("long.pdf", _scanned_pdf(limit + 5), "Midterm")
+                check(f"a {limit + 5}-page scan is refused", False)
+            except ex.ExtractionError as exc:
+                message = str(exc)
+                check(f"a {limit + 5}-page scan is refused", True)
+                check("the refusal says how many pages and what the limit is",
+                      str(limit + 5) in message and str(limit) in message)
+                check("the refusal says it was not graded in part",
+                      "in part" in message or "not graded" in message)
+                check("the refusal names the setting that would allow it",
+                      "OCR_MAX_PAGES" in message)
+            check(f"no pages were transcribed before refusing (read {len(read)})",
+                  read == [])
+
+            # The limit itself must still be gradable, or the fix has moved the
+            # cliff rather than removed it.
+            read.clear()
+            result = ex.extract_document("exact.pdf", _scanned_pdf(3), "Midterm")
+            check("a scan within the limit is still transcribed", len(read) == 3)
+            check("every page of it reaches the grader",
+                  all(f"page {i}" in result.text for i in (1, 2, 3)))
+    finally:
+        _restore()
+
+
 def test_refusals():
     print("\n-- unsupported formats are refused by name --")
 
@@ -823,6 +873,7 @@ def main():
     test_pages_are_transcribed_in_parallel()
     test_transcription_resumes_after_a_kill()
     test_transcription_prompt()
+    test_long_scan_is_refused_not_truncated()
     test_refusals()
     test_text_entry()
 
