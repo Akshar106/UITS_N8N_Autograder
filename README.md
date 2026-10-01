@@ -89,6 +89,7 @@ Everything under `scripts/` runs from the repository root.
 | `check_labels.py` | nothing | Validates a label set you supply: sub-parts sum to the total, every submission has a verdict on every part, referenced files exist and extract, and the score distribution is not all extremes. |
 | `make_pdfs.py` | `reportlab` | Renders an assignment source text into a PDF (`make_pdfs.py path/to/rubric.txt`). The text files are the source of truth; re-run after editing them. |
 | `make_canvas_text.py` | nothing | Converts an assignment source file into the two forms Canvas accepts: plain text for the editor, and semantic HTML for its HTML view, which is the only way code blocks keep their indentation. |
+| `benchmark_ocr.py` | LLM key | Times transcription of a real submission across model, resolution and concurrency, and prints the first page of each so a faster setting can be checked for whether it can still read the handwriting. |
 | `make_deploy_zip.py` | nothing | Builds `app.zip` from an explicit list of what the app needs, so a folder zip cannot sweep up `.env`, the local database or `.venv`. Anything not named in the script does not ship. |
 | `eval_grading.py` | LLM key | **Measures** the grader: mean error against known scores, run-to-run spread, and bias probes for writing fluency and answer length. |
 
