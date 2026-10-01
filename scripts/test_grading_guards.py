@@ -234,6 +234,25 @@ def test_quote_normalisation():
     check("punctuation and case still fold",
           contains("THE RUNNING TIME IS O(N^2)", "the running time is O(n^2)."))
 
+    # The tool's own annotations sit between the student's lines, so a quote
+    # running across them cannot match contiguously even though every word of
+    # it is the student's. Observed on a real submission: a pseudocode quote
+    # was flagged because a [diagram: ...] note had been inserted mid-block.
+    transcript = ("--- page 1 (machine transcription) ---\n"
+                  "if A[j] > max then           n^2\n"
+                  "  max <- A[j] ; [diagram: a curly brace joining two lines]\n"
+                  "  index <- j ;\n")
+    # _quote_is_in, not contains: marker stripping is one of the alternative
+    # haystacks the real check tries, which plain normalisation does not.
+    from app.grading import _quote_is_in
+
+    check("a quote spanning one of our own markers is not called missing",
+          _quote_is_in("max <- A[j] ; index <- j ;", transcript)[0])
+    check("a quote spanning a page header is not called missing",
+          _quote_is_in("if A[j] > max then", transcript)[0])
+    check("stripping markers does not let an absent quote through",
+          not _quote_is_in("max <- A[j] ; return B ;", transcript)[0])
+
     # Not cosmetic: the model added a word the student did not write.
     check("a word inserted into the quote is still caught",
           not contains("if moved = True then A[j+1] <- Key",

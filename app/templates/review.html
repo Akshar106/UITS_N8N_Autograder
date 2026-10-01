@@ -170,7 +170,7 @@
                              is worth seeing but not worth alarm. #}
                           <span class="badge badge-{{ 'low' if q.disagreement_material else 'info' }}">passes differ by {{ q.disagreement }}</span>
                         {% endif %}
-                        {% if q.snapped_from is not none %}
+                        {% if q.get('snapped_from') is not none %}
                           {# The faculty member set this criterion to Full Marks
                              or No Marks. Saying the award was moved onto that
                              scale is more honest than showing a clean number

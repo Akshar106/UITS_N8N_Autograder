@@ -455,6 +455,17 @@ def _normalise(text):
     return _WHITESPACE_RE.sub(" ", text).strip().lower()
 
 
+# Markers this tool inserted into a transcript -- a described diagram, a
+# crossed-out phrase, a page header. They sit BETWEEN the student's own lines,
+# so a quote that runs across them cannot match contiguously even though every
+# word of it is the student's.
+_TOOL_MARKER_RE = re.compile(
+    r"\[(?:diagram|struck|illegible|output)[^\]]*\]"
+    r"|---\s*page\s+\d+[^\n]*---"
+    r"|---\s*cell\s+\d+[^\n]*---",
+    re.IGNORECASE)
+
+
 def _haystacks(student_text):
     """The forms of the submission a quote may legitimately match against.
 
@@ -465,7 +476,11 @@ def _haystacks(student_text):
     """
     full = _normalise(student_text)
     without_asides = _normalise(_PARENTHETICAL_RE.sub(" ", student_text or ""))
-    return [h for h in dict.fromkeys([full, without_asides]) if h]
+    # Without this, the app flags its own annotations as the student's missing
+    # words: a quote spanning two lines of pseudocode fails because a
+    # [diagram: ...] note was inserted between them.
+    without_markers = _normalise(_TOOL_MARKER_RE.sub(" ", student_text or ""))
+    return [h for h in dict.fromkeys([full, without_asides, without_markers]) if h]
 
 
 def _quote_is_in(quote, student_text):
