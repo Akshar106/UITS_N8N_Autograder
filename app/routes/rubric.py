@@ -1,5 +1,7 @@
 import json
+import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
@@ -162,6 +164,12 @@ def run_grading(course_id, assignment_id):
 # death is noticed quickly, long enough to be nothing in database terms.
 HEARTBEAT_SECONDS = 30
 
+# How many submissions are graded at once. This is where a roster's time goes:
+# one submission may take seconds, but a hundred in a queue do not. Independent
+# of OCR_CONCURRENCY, which is a global cap on calls to the vision gateway, so
+# raising this does not multiply the load there.
+GRADING_CONCURRENCY = max(1, int(os.getenv("GRADING_CONCURRENCY", "3")))
+
 
 def _heartbeat(app, iu_user_id, course_id, assignment_id, stop):
     """Touch the job while it works, so slow work is not mistaken for a crash.
@@ -215,97 +223,138 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
             )
 
         try:
-            for submission in submissions:
-                user = submission.get("user") or {}
-                # The student identity always comes from Canvas, never from the LLM's
-                # echoed-back student_id, which could be hallucinated or transposed.
-                student_id = str(submission["user_id"])
-                student_name = user.get("name", f"Student {student_id}")
+            # Submissions are independent of one another, so they are graded
+            # several at a time. This is where a roster's time actually goes:
+            # each submission may be quick, but a hundred of them in a queue is
+            # not. The gateway is protected by its own global budget inside
+            # app/ocr.py, so raising this does not multiply the load on it.
+            workers = min(GRADING_CONCURRENCY, len(submissions)) or 1
+            current_app.logger.info(
+                "Grading %d submission(s), %d at a time", len(submissions), workers)
 
-                # Re-read the token each time rather than reusing the one this
-                # job started with: a full roster can outlast a Canvas token, and
-                # a stale one turns every remaining download into a failure.
-                try:
-                    access_token = access_token_for(iu_user_id)
-                except Exception as exc:  # noqa: BLE001 -- reported on the row, not raised
-                    current_app.logger.warning("Canvas token unavailable mid-run: %s", exc)
-
-                def on_page(done, total, who=student_name):
-                    # Shown on the review page while it works. "0 of 1
-                    # submissions" for ten minutes is indistinguishable from a
-                    # crash; "reading page 7 of 11" is not.
-                    #
-                    # Its own app context for the same reason as the cache: this
-                    # is called from a transcription worker thread, which has
-                    # none of its own.
-                    with app.app_context():
-                        storage.touch_grading_job(
-                            iu_user_id, course_id, assignment_id,
-                            message=f"Reading {who}'s submission: page {done} of {total}")
-
-                student_text, submission_filename, extraction_error, extraction_notes, from_ocr = \
-                    _extract_submission_text(submission, access_token, rubric["assignment_name"],
-                                             progress=on_page, cache=page_cache)
-                notes_text = "\n".join(extraction_notes) or None
-
-                # Canvas bumps `attempt` on every resubmission. Storing it is what
-                # lets the next grading run tell "same work, graded again" apart
-                # from "different work in the same row", so an approval granted
-                # for one attempt cannot silently carry over to another.
-                attempt = submission.get("attempt")
-                submitted_at = submission.get("submitted_at")
-
-                if extraction_error:
-                    storage.upsert_graded_submission(
-                        iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
-                        student_name, submission_filename, None, None, None, None,
-                        ai_error=extraction_error, extraction_notes=notes_text,
-                        submission_attempt=attempt, submitted_at=submitted_at,
-                    )
-                else:
-                    # A transcribed submission is forced to low confidence and
-                    # sent to a human whatever the passes say, so the second
-                    # pass buys a disagreement signal nobody acts on -- and it
-                    # doubles the slowest part of an already slow run.
-                    result = grading.grade_submission(
-                        rubric["assignment_name"], rubric["rubric_text"], student_id, student_text,
-                        expected_criteria=expected_criteria, expected_total=expected_total,
-                        anchors=anchors, passes=1 if from_ocr else None,
-                    )
-                    if result["ok"]:
-                        data = result["data"]
-                        if from_ocr:
-                            # The evidence check cannot protect a transcript from
-                            # itself: a quote is verified against the machine's
-                            # reading, so a misreading is confirmed, not caught.
-                            # The row goes to the top of the queue regardless of
-                            # how sure the grader says it is.
-                            data["confidence"] = "low"
-                        storage.upsert_graded_submission(
-                            iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
-                            student_name, submission_filename,
-                            data.get("score_awarded"), data.get("total_points"), data.get("overall_feedback"),
-                            _dump_breakdown(data.get("per_question_breakdown")),
-                            ai_confidence=data.get("confidence"),
-                            ai_disagreement=data.get("max_disagreement"),
-                            extraction_notes=notes_text,
-                            submission_attempt=attempt, submitted_at=submitted_at,
+            def grade_one(submission):
+                # Its own application context: this runs on a pool thread, and
+                # every storage call below reaches the database through Flask's
+                # g, which does not exist in one. Forgetting this is what broke
+                # transcription in production.
+                with app.app_context():
+                    try:
+                        _grade_submission_row(
+                            app, iu_user_id, course_id, assignment_id, rubric,
+                            submission, anchors, expected_criteria, expected_total,
+                            page_cache,
                         )
-                    else:
+                    except Exception as exc:  # noqa: BLE001
+                        # One bad submission must not take the roster with it.
+                        current_app.logger.exception("Grading failed for one submission")
+                        user = submission.get("user") or {}
+                        student_id = str(submission.get("user_id"))
                         storage.upsert_graded_submission(
-                            iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
-                            student_name, submission_filename, None, None, None, None,
-                            ai_error=result["error"], extraction_notes=notes_text,
-                            submission_attempt=attempt, submitted_at=submitted_at,
+                            iu_user_id, course_id, assignment_id, rubric["assignment_name"],
+                            student_id, user.get("name", f"Student {student_id}"), None,
+                            None, None, None, None, ai_error=str(exc),
+                            submission_attempt=submission.get("attempt"),
+                            submitted_at=submission.get("submitted_at"),
                         )
+                    finally:
+                        storage.increment_grading_progress(
+                            iu_user_id, course_id, assignment_id)
 
-                storage.increment_grading_progress(iu_user_id, course_id, assignment_id)
+            if workers == 1:
+                for submission in submissions:
+                    grade_one(submission)
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    list(pool.map(grade_one, submissions))
 
             storage.finish_grading_job(iu_user_id, course_id, assignment_id, "done")
         except Exception as exc:  # noqa: BLE001 -- last-resort guard so the job never hangs at "running" forever
             storage.finish_grading_job(iu_user_id, course_id, assignment_id, "error", str(exc))
         finally:
             stop_heartbeat.set()
+
+
+def _grade_submission_row(app, iu_user_id, course_id, assignment_id, rubric, submission,
+                          anchors, expected_criteria, expected_total, page_cache):
+    """Extract, grade and store one submission. Runs on a pool thread."""
+    user = submission.get("user") or {}
+    # The student identity always comes from Canvas, never from the LLM's
+    # echoed-back student_id, which could be hallucinated or transposed.
+    student_id = str(submission["user_id"])
+    student_name = user.get("name", f"Student {student_id}")
+
+    # Re-read the token each time rather than reusing the one this job started
+    # with: a full roster can outlast a Canvas token, and a stale one turns
+    # every remaining download into a failure.
+    access_token = None
+    try:
+        access_token = access_token_for(iu_user_id)
+    except Exception as exc:  # noqa: BLE001 -- reported on the row, not raised
+        current_app.logger.warning("Canvas token unavailable mid-run: %s", exc)
+
+    def on_page(done, total):
+        # Shown on the review page while it works. A count that does not move
+        # for minutes is indistinguishable from a crash; a page number is not.
+        with app.app_context():
+            storage.touch_grading_job(
+                iu_user_id, course_id, assignment_id,
+                message=f"Reading {student_name}'s submission: page {done} of {total}")
+
+    student_text, submission_filename, extraction_error, extraction_notes, from_ocr = \
+        _extract_submission_text(submission, access_token, rubric["assignment_name"],
+                                 progress=on_page, cache=page_cache)
+    notes_text = "\n".join(extraction_notes) or None
+
+    # Canvas bumps `attempt` on every resubmission. Storing it is what lets the
+    # next grading run tell "same work, graded again" apart from "different work
+    # in the same row", so an approval granted for one attempt cannot silently
+    # carry over to another.
+    attempt = submission.get("attempt")
+    submitted_at = submission.get("submitted_at")
+
+    if extraction_error:
+        storage.upsert_graded_submission(
+            iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
+            student_name, submission_filename, None, None, None, None,
+            ai_error=extraction_error, extraction_notes=notes_text,
+            submission_attempt=attempt, submitted_at=submitted_at,
+        )
+        return
+
+    # A transcribed submission is forced to low confidence and sent to a human
+    # whatever the passes say, so the second pass buys a disagreement signal
+    # nobody acts on -- and it doubles the slowest part of an already slow run.
+    result = grading.grade_submission(
+        rubric["assignment_name"], rubric["rubric_text"], student_id, student_text,
+        expected_criteria=expected_criteria, expected_total=expected_total,
+        anchors=anchors, passes=1 if from_ocr else None,
+    )
+    if not result["ok"]:
+        storage.upsert_graded_submission(
+            iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
+            student_name, submission_filename, None, None, None, None,
+            ai_error=result["error"], extraction_notes=notes_text,
+            submission_attempt=attempt, submitted_at=submitted_at,
+        )
+        return
+
+    data = result["data"]
+    if from_ocr:
+        # The evidence check cannot protect a transcript from itself: a quote is
+        # verified against the machine's reading, so a misreading is confirmed,
+        # not caught. The row goes to the top of the queue regardless of how
+        # sure the grader says it is.
+        data["confidence"] = "low"
+    storage.upsert_graded_submission(
+        iu_user_id, course_id, assignment_id, rubric["assignment_name"], student_id,
+        student_name, submission_filename,
+        data.get("score_awarded"), data.get("total_points"), data.get("overall_feedback"),
+        _dump_breakdown(data.get("per_question_breakdown")),
+        ai_confidence=data.get("confidence"),
+        ai_disagreement=data.get("max_disagreement"),
+        extraction_notes=notes_text,
+        submission_attempt=attempt, submitted_at=submitted_at,
+    )
 
 
 def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, access_token):

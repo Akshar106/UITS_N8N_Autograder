@@ -133,6 +133,7 @@ def create_app():
         request instead of an SSH session.
         """
         from app import extract, ocr
+        from app.routes import rubric
 
         try:
             from app._version import VERSION
@@ -149,6 +150,7 @@ def create_app():
             "llm_configured": bool(os.getenv("REALLM_API_KEY")),
             "llm_model": os.getenv("REALLM_MODEL_NAME"),
             "grading_passes": grading.GRADING_PASSES,
+            "grading_concurrency": rubric.GRADING_CONCURRENCY,
             "ocr_backend": ocr.backend_name(),
             "ocr_enabled": ocr.is_enabled(),
             "ocr_vision_model": ocr.VISION_MODEL if ocr.is_enabled() else None,

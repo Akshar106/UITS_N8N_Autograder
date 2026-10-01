@@ -94,7 +94,10 @@ def main():
         kb = sum(len(i) for i in images) // 1024
 
         ocr.VISION_MODEL = model
-        ocr.CONCURRENCY = concurrency
+        # Not a plain assignment: the gateway budget is a semaphore built at
+        # import, so setting CONCURRENCY alone would leave every setting
+        # queueing behind the same original limit.
+        ocr.set_concurrency(concurrency)
         label = f"{model} @ {dpi}dpi x{concurrency}"
         print(f"\n{label}  ({len(images)} pages, {kb} KB)...", flush=True)
 

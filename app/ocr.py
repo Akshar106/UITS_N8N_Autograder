@@ -82,6 +82,25 @@ REQUEST_TIMEOUT = int(os.getenv("OCR_TIMEOUT", "240"))
 # concurrency limit is unknown; raise it once IU confirms what they allow.
 CONCURRENCY = max(1, int(os.getenv("OCR_CONCURRENCY", "4")))
 
+# A GLOBAL budget, not a per-submission one. Submissions are graded several at
+# a time, so without this the load on the gateway would be the product of the
+# two settings rather than this number -- and a roster would open far more
+# connections than anyone agreed to. Threads queue here instead.
+_GATEWAY_SLOTS = threading.BoundedSemaphore(CONCURRENCY)
+
+
+def set_concurrency(limit):
+    """Change the gateway budget. For benchmarks; not for use mid-run.
+
+    The semaphore is built once at import, so assigning to CONCURRENCY alone
+    changes the size of the thread pools and nothing else -- every thread would
+    still queue behind the original budget, and a benchmark measuring the
+    concurrency lever would report that it does nothing.
+    """
+    global CONCURRENCY, _GATEWAY_SLOTS
+    CONCURRENCY = max(1, int(limit))
+    _GATEWAY_SLOTS = threading.BoundedSemaphore(CONCURRENCY)
+
 MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "3"))
 BACKOFF_SECONDS = float(os.getenv("OCR_BACKOFF_SECONDS", "3"))
 
@@ -275,7 +294,8 @@ def _read_with_retries(reader, image, index, context):
     last_error = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            return reader(image, index, context)
+            with _GATEWAY_SLOTS:
+                return reader(image, index, context)
         except OCRError:
             raise
         except requests.RequestException as exc:
