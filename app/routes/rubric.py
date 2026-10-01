@@ -184,6 +184,10 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
     Each graded submission is written as soon as it's ready, so the review
     queue can show partial results while grading is still in progress.
     """
+    # Built here, not inside the loop: it holds the app so its workers can
+    # reach the database from whatever thread they run on.
+    page_cache = _TranscriptCache(app)
+
     stop_heartbeat = threading.Event()
     threading.Thread(
         target=_heartbeat,
@@ -230,13 +234,18 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                     # Shown on the review page while it works. "0 of 1
                     # submissions" for ten minutes is indistinguishable from a
                     # crash; "reading page 7 of 11" is not.
-                    storage.touch_grading_job(
-                        iu_user_id, course_id, assignment_id,
-                        message=f"Reading {who}'s submission: page {done} of {total}")
+                    #
+                    # Its own app context for the same reason as the cache: this
+                    # is called from a transcription worker thread, which has
+                    # none of its own.
+                    with app.app_context():
+                        storage.touch_grading_job(
+                            iu_user_id, course_id, assignment_id,
+                            message=f"Reading {who}'s submission: page {done} of {total}")
 
                 student_text, submission_filename, extraction_error, extraction_notes, from_ocr = \
                     _extract_submission_text(submission, access_token, rubric["assignment_name"],
-                                             progress=on_page)
+                                             progress=on_page, cache=page_cache)
                 notes_text = "\n".join(extraction_notes) or None
 
                 # Canvas bumps `attempt` on every resubmission. Storing it is what
@@ -329,18 +338,29 @@ def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, ac
 
 
 class _TranscriptCache:
-    """Storage-backed page cache, so a killed run resumes rather than restarts."""
+    """Storage-backed page cache, so a killed run resumes rather than restarts.
 
-    @staticmethod
-    def get(key):
-        return storage.get_cached_page(key)
+    Bound to the app and entering its own context on every call, because pages
+    are transcribed on a thread pool and those workers have no Flask context.
+    Reaching for the database from one raises "Working outside of application
+    context" and takes the whole submission down -- which it did, on the first
+    page of every multi-page scan, until this was bound properly.
+    """
 
-    @staticmethod
-    def set(key, text):
-        storage.save_cached_page(key, text)
+    def __init__(self, app):
+        self._app = app
+
+    def get(self, key):
+        with self._app.app_context():
+            return storage.get_cached_page(key)
+
+    def set(self, key, text):
+        with self._app.app_context():
+            storage.save_cached_page(key, text)
 
 
-def _extract_submission_text(submission, access_token, assignment_name="", progress=None):
+def _extract_submission_text(submission, access_token, assignment_name="", progress=None,
+                             cache=None):
     """Return (text, filenames, error, notes, from_ocr) for one Canvas submission.
 
     notes are warnings about *how well* the file was read -- images that could
@@ -366,7 +386,7 @@ def _extract_submission_text(submission, access_token, assignment_name="", progr
             try:
                 content = canvas_client.download_attachment(attachment["url"], access_token)
                 document = extract.extract_document(filename, content, assignment_name,
-                                                    progress=progress, cache=_TranscriptCache)
+                                                    progress=progress, cache=cache)
             except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
                 problems.append(f"[Could not read {filename}: {exc}]")
                 continue

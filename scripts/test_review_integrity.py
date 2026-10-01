@@ -380,6 +380,71 @@ def test_long_job_is_not_mistaken_for_a_dead_one():
               (storage.get_grading_job(user, course, assignment)["message"] or ""))
 
 
+def test_transcription_callbacks_work_off_the_main_thread():
+    """Pages are read on a thread pool; its workers have no Flask context.
+
+    This shipped broken and killed every multi-page scan on its first page:
+    the cache and the progress note both reach the database through Flask's
+    g, which does not exist in a pool worker. A single-page image survived
+    because one page skips the pool and runs on the main thread -- which is
+    exactly why the symptom was "page 1 of 1, then nothing".
+
+    Everything here runs OFF the main thread deliberately. A test that calls
+    these from the main thread passes while production burns.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app import create_app, storage
+    from app.routes.rubric import _TranscriptCache
+
+    print("\n-- the cache and progress note work from a worker thread --")
+
+    os.environ["DATABASE_PATH"] = os.path.join(tempfile.mkdtemp(), "threads.sqlite3")
+    app = create_app()
+    cache = _TranscriptCache(app)
+
+    def round_trip(n):
+        cache.set(f"key-{n}", f"page {n} text")
+        return cache.get(f"key-{n}")
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(round_trip, range(8)))
+    check("the page cache reads and writes from pool threads",
+          results == [f"page {n} text" for n in range(8)])
+
+    def note(n):
+        with app.app_context():
+            storage.touch_grading_job("u", "c", "a", message=f"page {n} of 8")
+        return True
+
+    with app.app_context():
+        storage.start_grading_job("u", "c", "a", total=1)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        ok = list(pool.map(note, range(8)))
+    check("the progress note writes from pool threads", all(ok))
+    with app.app_context():
+        check("the note survives the trip",
+              "of 8" in (storage.get_grading_job("u", "c", "a")["message"] or ""))
+
+    # The bug was that an unbound cache raises rather than returning nothing.
+    class Unbound:
+        @staticmethod
+        def get(key):
+            return storage.get_cached_page(key)
+
+    def unbound_call(_):
+        try:
+            Unbound.get("k")
+            return "no error"
+        except RuntimeError as exc:
+            return "outside of application context" in str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        raised = list(pool.map(unbound_call, range(2)))
+    check("an unbound cache really does fail this way (the bug, pinned)",
+          all(r is True for r in raised))
+
+
 def test_canvas_rubric():
     from app import canvas_rubric
     from app.routes.rubric import _combine_rubric_sources
@@ -695,6 +760,7 @@ def main():
     test_audit_fixes()
     test_partial_submission_is_refused()
     test_healthz_reports_configuration()
+    test_transcription_callbacks_work_off_the_main_thread()
     test_long_job_is_not_mistaken_for_a_dead_one()
     test_canvas_rubric()
     test_upgrade_from_existing_database()
