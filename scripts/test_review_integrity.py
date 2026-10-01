@@ -253,7 +253,7 @@ def test_partial_submission_is_refused():
     def download(url, token=None):
         return b"x" if url.endswith("1") else b"def my_sort(A):\n    return A\n"
 
-    def extract_document(filename, content, assignment_name="", progress=None):
+    def extract_document(filename, content, assignment_name="", **kwargs):
         if filename.endswith(".pdf"):
             raise extract.ExtractionError("transcribing its pages failed: read timed out")
         document = extract.Extracted()
@@ -272,7 +272,7 @@ def test_partial_submission_is_refused():
           "problem1.py" in (filenames or ""))
 
     # The other direction must still work: warnings are not failures.
-    def extract_with_warning(filename, content, assignment_name="", progress=None):
+    def extract_with_warning(filename, content, assignment_name="", **kwargs):
         document = extract.Extracted()
         document.text = content.decode()
         document.notes.append("1 image could not be read")
