@@ -139,6 +139,15 @@ def extract_document(filename, content_bytes, assignment_name=""):
     allowed = supported_extensions()
     if ext in IMAGE_EXTENSIONS and ocr.is_enabled():
         pass  # handled below by the transcription reader
+    elif ext in IMAGE_EXTENSIONS:
+        # The tool CAN read images; it has not been switched on. Telling a
+        # faculty member that images are unreadable sends them to chase the
+        # student for a different file when the fix is a setting on the server.
+        raise ExtractionError(
+            f"This is an image (.{ext}), and image reading is turned off on this "
+            f"server, so it was not graded. Set OCR_BACKEND to switch it on, or "
+            f"ask for the work as a .pdf, .docx or .txt."
+        )
     elif ext in _KNOWN_UNSUPPORTED:
         raise ExtractionError(_KNOWN_UNSUPPORTED[ext])
     if ext not in allowed:
@@ -479,8 +488,9 @@ def _read_pdf(content_bytes, assignment_name=""):
         result.stats["incomplete"] = True
         result.notes.append(
             f"This PDF has {page_count} page{'s' if page_count != 1 else ''} but "
-            f"almost no machine-readable text, and does contain images. It is "
-            f"most likely a scan or photographs, which the grader cannot read."
+            f"almost no machine-readable text, and does contain images -- most "
+            f"likely a scan or photographs of handwriting. Reading those is "
+            f"turned off on this server (set OCR_BACKEND), so it was not graded."
         )
     elif images:
         # Readable text AND pictures: the answers were graded, but a diagram or

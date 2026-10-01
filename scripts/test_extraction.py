@@ -473,15 +473,17 @@ def test_handwriting_off_by_default():
         ex.extract_document("page.png", _png())
         check("a photograph is refused when reading is off", False)
     except ex.ExtractionError as exc:
-        # .png keeps its own actionable message rather than the generic one.
+        # The refusal must say the feature is OFF, not that it does not exist:
+        # a faculty member told "images cannot be read" chases the student for
+        # a different file when the fix is a server setting.
         check("a photograph is refused when reading is off",
-              "Images cannot be read" in str(exc))
+              "turned off on this server" in str(exc) and "OCR_BACKEND" in str(exc))
     try:
         ex.extract_document("scan.pdf", _scanned_pdf())
         check("a scanned PDF is refused when reading is off", False)
     except ex.ExtractionError as exc:
         check("a scanned PDF is refused when reading is off",
-              "scan or photographs" in str(exc))
+              "scan or photographs" in str(exc) and "turned off on this server" in str(exc))
 
 
 def test_handwriting_transcription():
@@ -622,9 +624,10 @@ def test_transcription_prompt():
 def test_refusals():
     print("\n-- unsupported formats are refused by name --")
 
-    for ext, expected in (("doc", "Save As"), ("png", "Images cannot be read"),
+    for ext, expected in (("doc", "Save As"), ("png", "turned off on this server"),
                           ("zip", "Archives cannot be read"), ("pages", "Export To"),
-                          ("html", "submit the .ipynb file itself")):
+                          ("html", "submit the .ipynb file itself"),
+                          ("heic", "Images cannot be read")):
         try:
             read(f"x.{ext}", b"content")
             check(f".{ext} is refused", False)
