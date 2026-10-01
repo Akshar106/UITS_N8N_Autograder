@@ -82,24 +82,45 @@ REQUEST_TIMEOUT = int(os.getenv("OCR_TIMEOUT", "240"))
 # concurrency limit is unknown; raise it once IU confirms what they allow.
 CONCURRENCY = max(1, int(os.getenv("OCR_CONCURRENCY", "4")))
 
-# A GLOBAL budget, not a per-submission one. Submissions are graded several at
-# a time, so without this the load on the gateway would be the product of the
-# two settings rather than this number -- and a roster would open far more
-# connections than anyone agreed to. Threads queue here instead.
-_GATEWAY_SLOTS = threading.BoundedSemaphore(CONCURRENCY)
+# The default must match GRADING_CONCURRENCY in app/routes/rubric.py, which is
+# the real number of submissions in flight. It is read from the environment
+# here rather than imported because importing the route module from the reader
+# would be a cycle. scripts/test_concurrency.py pins the two together so they
+# cannot drift apart silently.
+_SUBMISSIONS_IN_FLIGHT = max(1, int(os.getenv("GRADING_CONCURRENCY", "3")))
+
+# A ceiling on calls in flight to the gateway across the WHOLE run, so a roster
+# cannot open more connections than IU has agreed to. It defaults to the
+# product, which throttles nothing: every submission being graded gets its full
+# page budget, exactly as it would if it were the only one.
+#
+# It defaulted to CONCURRENCY alone for one commit, and that was a mistake
+# worth remembering. CONCURRENCY is tuned for ONE submission's pages, so
+# sharing that single budget between three of them made every handwritten
+# submission twice as slow while the batch as a whole looked faster. A total
+# that does not scale with the number of submissions is not a budget, it is a
+# queue. Lower this deliberately if IU names a limit; do not lower it by
+# accident.
+MAX_IN_FLIGHT = max(
+    1,
+    int(os.getenv("OCR_MAX_IN_FLIGHT", str(CONCURRENCY * _SUBMISSIONS_IN_FLIGHT))),
+)
+_GATEWAY_SLOTS = threading.BoundedSemaphore(MAX_IN_FLIGHT)
 
 
-def set_concurrency(limit):
-    """Change the gateway budget. For benchmarks; not for use mid-run.
+def set_concurrency(limit, max_in_flight=None):
+    """Change the page budget, and optionally the gateway ceiling. For benchmarks.
 
     The semaphore is built once at import, so assigning to CONCURRENCY alone
     changes the size of the thread pools and nothing else -- every thread would
-    still queue behind the original budget, and a benchmark measuring the
+    still queue behind the original ceiling, and a benchmark measuring the
     concurrency lever would report that it does nothing.
     """
-    global CONCURRENCY, _GATEWAY_SLOTS
+    global CONCURRENCY, MAX_IN_FLIGHT, _GATEWAY_SLOTS
     CONCURRENCY = max(1, int(limit))
-    _GATEWAY_SLOTS = threading.BoundedSemaphore(CONCURRENCY)
+    MAX_IN_FLIGHT = max(1, int(max_in_flight if max_in_flight is not None
+                              else CONCURRENCY * _SUBMISSIONS_IN_FLIGHT))
+    _GATEWAY_SLOTS = threading.BoundedSemaphore(MAX_IN_FLIGHT)
 
 MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "3"))
 BACKOFF_SECONDS = float(os.getenv("OCR_BACKOFF_SECONDS", "3"))

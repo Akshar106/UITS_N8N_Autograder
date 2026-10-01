@@ -155,6 +155,7 @@ def create_app():
             "ocr_enabled": ocr.is_enabled(),
             "ocr_vision_model": ocr.VISION_MODEL if ocr.is_enabled() else None,
             "ocr_concurrency": ocr.CONCURRENCY,
+            "ocr_max_in_flight": ocr.MAX_IN_FLIGHT,
             "accepted_uploads": list(extract.supported_extensions()),
             "database_path": app.config["DATABASE_PATH"],
         }

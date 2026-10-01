@@ -18,11 +18,14 @@ Two rules, each of which has already cost a production outage or nearly did:
                         this took down every multi-page submission once; the
                         failure looked like a killed worker, not a bug.
 
-  the gateway budget    OCR_CONCURRENCY is a GLOBAL cap on calls in flight to
-                        the vision gateway, not a per-submission one. If it
-                        were per-submission, grading three at a time would
-                        triple the agreed load without anyone changing a
-                        setting.
+  the gateway ceiling   OCR_MAX_IN_FLIGHT caps calls in flight to the vision
+                        gateway across the whole run, and it SCALES with the
+                        number of submissions being graded. For one commit it
+                        did not: the total was pinned at one submission's worth
+                        of pages, so three handwritten submissions shared what
+                        one used to have and each took twice as long, while the
+                        batch as a whole looked faster. A total that does not
+                        scale is not a budget, it is a queue.
 
 Plus the things a roster needs to survive: one bad submission must not take
 the other ninety-nine with it, progress must be counted exactly once per
@@ -217,50 +220,112 @@ def test_one_bad_submission_does_not_take_the_roster():
     check("the job as a whole did not fail", job["status"] == "done")
 
 
-def test_gateway_budget_is_global_not_per_submission():
-    """OCR_CONCURRENCY caps calls in flight across the whole run, not per file."""
+def _measure_in_flight(submissions, pages, page_seconds=0.05):
+    """Run N submissions of M pages at once; return (peak in flight, seconds)."""
+    from concurrent.futures import ThreadPoolExecutor
+
     from app import ocr
 
-    print("\n-- the vision gateway budget holds across concurrent submissions --")
-    original_concurrency = ocr.CONCURRENCY
-    original_slots = ocr._GATEWAY_SLOTS
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def reader(image, index, context):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        time.sleep(page_seconds)
+        with lock:
+            in_flight -= 1
+        return "page text"
+
+    def one_submission(_):
+        with ThreadPoolExecutor(max_workers=min(ocr.CONCURRENCY, pages)) as pool:
+            list(pool.map(
+                lambda i: ocr._read_with_retries(reader, f"page-{i}".encode(), i, ""),
+                range(pages)))
+
+    started = time.time()
+    with ThreadPoolExecutor(max_workers=submissions) as pool:
+        list(pool.map(one_submission, range(submissions)))
+    return peak, time.time() - started, in_flight
+
+
+def test_the_gateway_ceiling_is_a_ceiling_not_a_queue():
+    """The regression: a total that does not scale starves every submission.
+
+    OCR_MAX_IN_FLIGHT once defaulted to OCR_CONCURRENCY alone -- one
+    submission's worth of pages, shared between all of them. The batch got
+    faster and every individual handwritten submission got slower, which is
+    the opposite of what anyone waiting on a grade experiences as speed.
+    """
+    from app import ocr
+
+    print("\n-- a submission keeps its own page budget when others are running --")
+    saved = (ocr.CONCURRENCY, ocr.MAX_IN_FLIGHT, ocr._GATEWAY_SLOTS)
     try:
-        ocr.set_concurrency(3)
+        # Four pages each, as the app is configured, three submissions at once.
+        ocr.set_concurrency(4, max_in_flight=4 * 3)
 
-        in_flight = 0
-        peak = 0
-        lock = threading.Lock()
+        alone_peak, alone_took, _ = _measure_in_flight(submissions=1, pages=8)
+        together_peak, together_took, left = _measure_in_flight(submissions=3, pages=8)
 
-        def reader(image, index, context):
-            nonlocal in_flight, peak
-            with lock:
-                in_flight += 1
-                peak = max(peak, in_flight)
-            time.sleep(0.05)
-            with lock:
-                in_flight -= 1
-            return "page text"
+        check(f"one submission uses its whole page budget (peak {alone_peak})",
+              alone_peak == 4)
+        check(f"three submissions scale the budget, not share it (peak {together_peak})",
+              together_peak == 12)
+        # The regression showed up as wall time, so that is what is measured.
+        # Generous bound: this is about 1x versus 3x, not about precision.
+        check(f"a submission is no slower for having company "
+              f"({alone_took:.2f}s alone, {together_took:.2f}s together)",
+              together_took < alone_took * 2)
+        check("the budget is fully released", left == 0)
 
-        def one_submission():
-            # Six pages each, as a scanned submission would have.
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                list(pool.map(
-                    lambda i: ocr._read_with_retries(reader, b"image-bytes", i, ""),
-                    range(6)))
-
-        threads = [threading.Thread(target=one_submission) for _ in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        check(f"never more than 3 calls in flight (peak was {peak})", peak <= 3)
-        check("the cap was actually exercised, not merely never approached", peak == 3)
-        check("the budget is released again", in_flight == 0)
+        # The ceiling still binds when it is set deliberately low, which is
+        # what happens the day IU names a concurrency limit.
+        ocr.set_concurrency(4, max_in_flight=5)
+        capped_peak, _, left = _measure_in_flight(submissions=3, pages=8)
+        check(f"an explicit low ceiling still holds (peak {capped_peak})",
+              capped_peak <= 5)
+        check("the low ceiling is actually reached", capped_peak == 5)
+        check("the capped budget is released too", left == 0)
     finally:
-        ocr.CONCURRENCY = original_concurrency
-        ocr._GATEWAY_SLOTS = original_slots
+        ocr.CONCURRENCY, ocr.MAX_IN_FLIGHT, ocr._GATEWAY_SLOTS = saved
+
+
+def test_the_two_concurrency_defaults_agree():
+    """ocr.py reads GRADING_CONCURRENCY from the environment to avoid a cycle.
+
+    Two copies of a default is how a ceiling silently stops scaling, so the
+    copies are pinned to each other here rather than left to a code reviewer.
+    """
+    import inspect
+
+    from app import ocr
+    from app.routes import rubric as rubric_module
+
+    print("\n-- the two copies of the submission-count default agree --")
+    ocr_source = inspect.getsource(ocr)
+    rubric_source = inspect.getsource(rubric_module)
+    check("ocr.py reads the same environment variable the route does",
+          'getenv("GRADING_CONCURRENCY"' in ocr_source
+          and 'getenv("GRADING_CONCURRENCY"' in rubric_source)
+
+    # Not rubric.GRADING_CONCURRENCY: other tests here reassign it, so reading
+    # it would make this check depend on the order they ran in. Both defaults
+    # are re-derived from source instead.
+    def written_default(source):
+        import re
+        match = re.search(r'getenv\("GRADING_CONCURRENCY",\s*"(\d+)"\)', source)
+        return int(match.group(1)) if match else None
+
+    ocr_default = written_default(ocr_source)
+    rubric_default = written_default(rubric_source)
+    check(f"both default to the same number ({ocr_default} and {rubric_default})",
+          ocr_default is not None and ocr_default == rubric_default)
+    check("the ceiling leaves every concurrent submission its full page budget",
+          ocr.MAX_IN_FLIGHT >= ocr.CONCURRENCY * ocr._SUBMISSIONS_IN_FLIGHT)
 
 
 def test_concurrency_of_one_still_works():
@@ -355,7 +420,8 @@ def test_transcribed_rows_are_still_forced_to_human_review():
 def main():
     test_pool_threads_have_an_application_context()
     test_one_bad_submission_does_not_take_the_roster()
-    test_gateway_budget_is_global_not_per_submission()
+    test_the_gateway_ceiling_is_a_ceiling_not_a_queue()
+    test_the_two_concurrency_defaults_agree()
     test_concurrency_of_one_still_works()
     test_an_empty_roster_is_not_an_error()
     test_transcribed_rows_are_still_forced_to_human_review()

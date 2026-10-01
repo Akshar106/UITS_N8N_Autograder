@@ -165,9 +165,15 @@ def run_grading(course_id, assignment_id):
 HEARTBEAT_SECONDS = 30
 
 # How many submissions are graded at once. This is where a roster's time goes:
-# one submission may take seconds, but a hundred in a queue do not. Independent
-# of OCR_CONCURRENCY, which is a global cap on calls to the vision gateway, so
-# raising this does not multiply the load there.
+# one submission may take seconds, but a hundred in a queue do not.
+#
+# Raising this DOES raise the load on the vision gateway, and that is the
+# point: each submission needs its own pages in flight to finish at its own
+# speed. OCR_MAX_IN_FLIGHT is the ceiling on the total, and it scales with this
+# number by default. Capping the total at one submission's worth -- which this
+# app did for exactly one commit -- makes every handwritten submission wait
+# behind the others, so the batch looks faster while each student's grade takes
+# longer to appear.
 GRADING_CONCURRENCY = max(1, int(os.getenv("GRADING_CONCURRENCY", "3")))
 
 
@@ -226,8 +232,9 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
             # Submissions are independent of one another, so they are graded
             # several at a time. This is where a roster's time actually goes:
             # each submission may be quick, but a hundred of them in a queue is
-            # not. The gateway is protected by its own global budget inside
-            # app/ocr.py, so raising this does not multiply the load on it.
+            # not. Each one keeps its own page budget at the gateway, under the
+            # OCR_MAX_IN_FLIGHT ceiling in app/ocr.py, so a handwritten
+            # submission is no slower for being graded alongside others.
             workers = min(GRADING_CONCURRENCY, len(submissions)) or 1
             current_app.logger.info(
                 "Grading %d submission(s), %d at a time", len(submissions), workers)
