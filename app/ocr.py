@@ -122,6 +122,14 @@ def set_concurrency(limit, max_in_flight=None):
                               else CONCURRENCY * _SUBMISSIONS_IN_FLIGHT))
     _GATEWAY_SLOTS = threading.BoundedSemaphore(MAX_IN_FLIGHT)
 
+# A ceiling on what the transcriber may generate for ONE page. A dense
+# handwritten page is roughly 450 output tokens, so this is about four times
+# the room any page needs -- it is a runaway guard, not a budget. Unset, the
+# server's own default applied, and a page that looped ran until the request
+# timeout instead of stopping. Being cut off at this limit is detected, never
+# silently accepted: see the finish_reason handling in _read_page_vision.
+MAX_OUTPUT_TOKENS = int(os.getenv("OCR_MAX_OUTPUT_TOKENS", "2000"))
+
 MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "3"))
 BACKOFF_SECONDS = float(os.getenv("OCR_BACKOFF_SECONDS", "3"))
 
@@ -382,6 +390,52 @@ def _vision_payloads(image, index, context):
     return shapes
 
 
+def looks_degenerate(text, min_length=400):
+    """True when the text ends in a repetition loop rather than a transcript.
+
+    A greedy decoder on an ambiguous image can fall into repeating a phrase
+    until something stops it, and with no token limit the only thing that did
+    was the request timeout. The result is not a slow page, it is a page that
+    never finished.
+
+    This only ever decides which ADVICE a refusal carries, never whether to
+    refuse, so a false positive costs a confusing message rather than a
+    student's work. It is still written to be hard to trigger by accident,
+    because the first version was not: counting how often the tail recurred
+    anywhere in the text flagged ordinary prose whose lines happened to end
+    the same way ("...which is still O(n lg n)." thirty-nine times over).
+
+    What a loop actually looks like is the SAME span repeated back to back at
+    the end, so that is what is tested -- the real period of the tail, rather
+    than guessed-at window sizes, since a cycle of 31 characters is invisible
+    to a window of 20, 40 or 80.
+    """
+    if len(text) < min_length:
+        return False
+
+    # The same line over and over, consecutively. Not merely "few distinct
+    # lines": a true/false answer sheet is dozens of lines drawn from two
+    # values, and refusing to read one would be absurd.
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    run = best_run = 1
+    for earlier, later in zip(lines, lines[1:]):
+        run = run + 1 if later == earlier else 1
+        best_run = max(best_run, run)
+    if best_run >= 10:
+        return True
+
+    # A cycle with no newlines in it. Three consecutive identical blocks is
+    # something prose does not do.
+    tail = text[-900:]
+    for period in range(4, 151):
+        if len(tail) < period * 3:
+            break
+        block = tail[-period:]
+        if tail[-period * 2:-period] == block and tail[-period * 3:-period * 2] == block:
+            return True
+    return False
+
+
 def _read_page_vision(image, index, context):
     url = os.getenv("REALLM_URL")
     key = os.getenv("REALLM_API_KEY")
@@ -403,6 +457,15 @@ def _read_page_vision(image, index, context):
                 # transcribe the same way on a re-run or a re-grade changes a
                 # grade for no reason the student could understand.
                 "temperature": 0,
+                # A bound on how long one page can take. A dense handwritten
+                # page is about 450 output tokens; this used to be unset, so
+                # the server's own default applied and a page that sent the
+                # model into a repetition loop ran until the 240s timeout --
+                # roughly 5,000 to 12,000 tokens, ten to twenty times what any
+                # page needs. Two such pages were 83% of the time to read a
+                # real 11-page submission. Generous, not tight: being cut off
+                # is detected below rather than quietly accepted.
+                "max_tokens": MAX_OUTPUT_TOKENS,
             },
             timeout=REQUEST_TIMEOUT,
         )
@@ -410,11 +473,33 @@ def _read_page_vision(image, index, context):
             last_error = f"{response.status_code}: {response.text[:200]}"
             continue
         try:
-            message = response.json()["choices"][0]["message"]
+            choice = response.json()["choices"][0]
+            message = choice["message"]
             text = (message.get("content") or "").strip()
+            finish_reason = choice.get("finish_reason")
         except (ValueError, KeyError, IndexError) as exc:
             last_error = f"unparseable response ({exc})"
             continue
+
+        if text and finish_reason == "length":
+            # The reply was cut off. Accepting it would store half a page as
+            # though it were the whole page, which is the silent partial read
+            # this module exists to prevent -- and it was being accepted,
+            # because nothing looked at finish_reason at all.
+            if looks_degenerate(text):
+                raise OCRError(
+                    f"Page {index} sent the transcriber into a repetition loop, so "
+                    f"it was not read. A clearer scan of this page would help."
+                )
+            last_error = (
+                f"the transcript was cut off at the {MAX_OUTPUT_TOKENS}-token limit; "
+                f"raise OCR_MAX_OUTPUT_TOKENS if pages are genuinely this long"
+            )
+            continue
+
+        # No repetition check on a reply that ended by itself. A model that
+        # stopped decided it was finished, and a page of one-word answers is
+        # not a loop -- refusing it would throw away work the student did.
         if text:
             # No per-word confidence from a chat model; the markers it was asked
             # to leave are the only uncertainty signal available.

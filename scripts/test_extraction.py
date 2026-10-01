@@ -589,6 +589,133 @@ def test_vision_gateway_shape():
         _restore()
 
 
+def test_runaway_generation_is_bounded_and_detected():
+    """A page that sends the model into a loop must not cost 240s, or be graded.
+
+    Nine pages of a real submission answered in 8-11s; two ran to the 240s
+    timeout, and those two were 83% of the time to read it. A page is about
+    450 output tokens, so a 240s reply at any plausible rate means thousands
+    of tokens -- the model did not stop. Nothing capped it (no max_tokens) and
+    nothing noticed (nothing read finish_reason), so a reply cut off at the
+    server's own limit was stored as if it were the whole page.
+    """
+    import importlib
+    import json as jsonlib
+    from unittest import mock
+
+    import app.ocr
+
+    print("\n-- a transcriber that will not stop is capped and caught --")
+    os.environ["OCR_BACKEND"] = "vision"
+    os.environ["REALLM_URL"] = "https://example.invalid/v1/chat/completions"
+    os.environ["REALLM_API_KEY"] = "test-only"
+    importlib.reload(app.ocr)
+    o = app.ocr
+
+    class Reply:
+        status_code = 200
+
+        def __init__(self, text, finish="stop"):
+            self._body = {"choices": [{"message": {"content": text},
+                                       "finish_reason": finish}]}
+
+        def json(self):
+            return self._body
+
+    try:
+        sent = {}
+
+        def capture(url, **kwargs):
+            sent.update(kwargs.get("json") or {})
+            return Reply("A BST keeps smaller values on the left.")
+
+        with mock.patch.object(o.requests, "post", side_effect=capture):
+            page = o._read_page_vision(b"\x89PNG", 1, "ctx")
+        check("a token ceiling is sent with every page", "max_tokens" in sent)
+        check(f"the ceiling is generous, not tight ({sent.get('max_tokens')})",
+              1000 <= sent.get("max_tokens", 0) <= 8000)
+        check("a normal page still comes back", "smaller values" in page.text)
+        check("the request is still deterministic", sent.get("temperature") == 0)
+
+        # Cut off at the limit, but not repetitive: a genuinely long page.
+        # It must be refused, never stored as a complete reading.
+        # Varied prose, not a repeated phrase: a page that is genuinely long is
+        # a different thing from a page that is looping, and the two must not
+        # be answered the same way.
+        long_page = "\n".join(
+            f"Step {i}: substituting the bound from step {i - 1} gives "
+            f"T(n) <= {i}n lg n + {i * 3}n, which is still O(n lg n)."
+            for i in range(1, 40))
+        with mock.patch.object(o.requests, "post",
+                               side_effect=lambda *a, **k: Reply(long_page, "length")):
+            try:
+                o._read_page_vision(b"\x89PNG", 2, "ctx")
+                check("a truncated page is not accepted as complete", False)
+            except o.OCRError as exc:
+                check("a truncated page is not accepted as complete", True)
+                check("the refusal names the setting that would allow more",
+                      "OCR_MAX_OUTPUT_TOKENS" in str(exc))
+
+        # A repetition loop is a different failure and says so, because the
+        # answer is a better scan, not a higher token limit.
+        loop = "the the the the the the the the the the \n" * 30
+        with mock.patch.object(o.requests, "post",
+                               side_effect=lambda *a, **k: Reply(loop, "length")):
+            try:
+                o._read_page_vision(b"\x89PNG", 3, "ctx")
+                check("a looping page is refused", False)
+            except o.OCRError as exc:
+                check("a looping page is refused", True)
+                check("a loop is reported as a loop, not as a length limit",
+                      "loop" in str(exc).lower())
+
+        # The first version of the detector failed exactly here: thirty-nine
+        # varied lines that happened to END the same way were counted as a
+        # loop, because it asked how often the tail recurred anywhere rather
+        # than whether it recurred back to back.
+        check("varied prose with repeated line endings is not a loop",
+              not o.looks_degenerate(long_page))
+        # A real answer sheet is not periodic, and is not flagged.
+        answers = "True False False True True False True False False False " \
+                  "True True False True False False True True True False".split()
+        check("a page of one-word answers is not a loop",
+              not o.looks_degenerate("\n".join(f"{i}. {a}" for i, a in
+                                               enumerate(answers * 5, start=1))))
+        # A PERFECTLY cyclic page is indistinguishable from a loop by text
+        # alone, and does read as one. That costs the wording of a refusal and
+        # nothing else -- both branches refuse the page either way -- so it is
+        # recorded here as known behaviour rather than papered over.
+        check("a perfectly periodic page reads as a loop, which only changes the advice",
+              o.looks_degenerate("\n".join(["True", "False"] * 60)))
+        # A reply that ended by itself is trusted even if it looks repetitive:
+        # the model decided it was done, and the alternative is refusing a
+        # page of legitimately repetitive work.
+        repetitive_but_finished = "\n".join(["True"] * 100)
+        with mock.patch.object(
+                o.requests, "post",
+                side_effect=lambda *a, **k: Reply(repetitive_but_finished, "stop")):
+            page = o._read_page_vision(b"\x89PNG", 4, "ctx")
+        check("a repetitive page that ENDED is still accepted",
+              page.text.startswith("True"))
+
+        check("a real transcript is not mistaken for a loop",
+              not o.looks_degenerate(
+                  "Problem 1. We sort the array first, which costs O(n lg n).\n"
+                  "Then a single pass finds the pair, so the total is O(n lg n).\n"
+                  "[diagram: two pointers moving inward]\n"
+                  "Problem 2. The recurrence is T(n) = 2T(n/2) + n, so by the\n"
+                  "master theorem the answer is O(n lg n) again. I checked this\n"
+                  "against the table in the notes and it matches case 2."))
+        check("a short repeated answer is not mistaken for a loop",
+              not o.looks_degenerate("True\nTrue\nFalse\nTrue"))
+        check("an end-to-end repetition with no newlines is caught",
+              o.looks_degenerate("the quick brown fox jumps over " * 40))
+    finally:
+        os.environ.pop("REALLM_URL", None)
+        os.environ.pop("REALLM_API_KEY", None)
+        _restore()
+
+
 def test_pages_are_transcribed_in_parallel():
     """Serial transcription is hostage to its slowest page.
 
@@ -870,6 +997,7 @@ def main():
     test_handwriting_off_by_default()
     test_handwriting_transcription()
     test_vision_gateway_shape()
+    test_runaway_generation_is_bounded_and_detected()
     test_pages_are_transcribed_in_parallel()
     test_transcription_resumes_after_a_kill()
     test_transcription_prompt()
