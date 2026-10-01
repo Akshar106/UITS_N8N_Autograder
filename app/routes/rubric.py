@@ -158,12 +158,39 @@ def run_grading(course_id, assignment_id):
     return redirect(url_for("review.review_queue", course_id=course_id, assignment_id=assignment_id))
 
 
+# How often a running job says it is still alive. Short enough that a real
+# death is noticed quickly, long enough to be nothing in database terms.
+HEARTBEAT_SECONDS = 30
+
+
+def _heartbeat(app, iu_user_id, course_id, assignment_id, stop):
+    """Touch the job while it works, so slow work is not mistaken for a crash.
+
+    Its own thread deliberately: the work it is vouching for spends minutes
+    blocked inside a single network call, so a heartbeat on the working thread
+    would stop exactly when it is most needed.
+    """
+    with app.app_context():
+        while not stop.wait(HEARTBEAT_SECONDS):
+            try:
+                storage.touch_grading_job(iu_user_id, course_id, assignment_id)
+            except Exception as exc:  # noqa: BLE001 -- never kill the run over a heartbeat
+                current_app.logger.warning("Grading heartbeat failed: %s", exc)
+
+
 def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, submissions, access_token):
     """Runs in a background thread so a large roster can't block/timeout the request.
 
     Each graded submission is written as soon as it's ready, so the review
     queue can show partial results while grading is still in progress.
     """
+    stop_heartbeat = threading.Event()
+    threading.Thread(
+        target=_heartbeat,
+        args=(app, iu_user_id, course_id, assignment_id, stop_heartbeat),
+        daemon=True,
+    ).start()
+
     with app.app_context():
         # Parsed once, outside the loop: these are what let grading reject a
         # response that dropped a question or graded out of the wrong total.
@@ -255,6 +282,8 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
             storage.finish_grading_job(iu_user_id, course_id, assignment_id, "done")
         except Exception as exc:  # noqa: BLE001 -- last-resort guard so the job never hangs at "running" forever
             storage.finish_grading_job(iu_user_id, course_id, assignment_id, "error", str(exc))
+        finally:
+            stop_heartbeat.set()
 
 
 def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, access_token):

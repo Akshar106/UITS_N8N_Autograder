@@ -16,6 +16,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -313,6 +314,55 @@ def test_healthz_reports_configuration():
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def test_long_job_is_not_mistaken_for_a_dead_one():
+    """A submission that takes ten minutes must not look like a crash.
+
+    Observed for real: with transcription enabled, one 11-page submission ran
+    far longer than the 2-minute staleness window. Progress is counted per
+    SUBMISSION, so updated_at never moved, the review page announced the job
+    had stopped, and it invited a restart -- which started a second job
+    alongside the first, both transcribing the same pages.
+    """
+    from app import storage
+    from app.storage import init_db
+
+    print("\n-- a slow job is alive, not stale --")
+
+    app = make_app(os.path.join(tempfile.mkdtemp(), "slowjob.sqlite3"))
+    init_db(app)
+    user, course, assignment = "iu-slow", "c1", "a1"
+    with app.app_context():
+        storage.start_grading_job(user, course, assignment, total=1)
+        job = storage.get_grading_job(user, course, assignment)
+        check("a job starts alive", not storage.job_is_stale(job))
+
+        # Wind updated_at back past the window without touching progress, which is
+        # exactly what a long transcription does.
+        db = storage.get_db()
+        stale_time = (datetime.now(timezone.utc) - timedelta(seconds=storage.STALE_JOB_SECONDS + 60))
+        db.execute("UPDATE grading_jobs SET updated_at = ? WHERE iu_user_id = ?",
+                   (stale_time.isoformat(), user))
+        db.commit()
+        check("silence past the window does read as stale",
+              storage.job_is_stale(storage.get_grading_job(user, course, assignment)))
+
+        # The heartbeat is what a healthy long job has and a dead one does not.
+        storage.touch_grading_job(user, course, assignment)
+        job = storage.get_grading_job(user, course, assignment)
+        check("a heartbeat revives it without claiming progress",
+              not storage.job_is_stale(job) and job["done"] == 0)
+        check("the heartbeat leaves the job running", job["status"] == "running")
+
+        # A finished job must not be kept alive by a late beat.
+        storage.finish_grading_job(user, course, assignment, "done")
+        storage.touch_grading_job(user, course, assignment)
+        check("a heartbeat cannot resurrect a finished job",
+              storage.get_grading_job(user, course, assignment)["status"] == "done")
+
+        check("the window is comfortably above the heartbeat interval",
+              storage.STALE_JOB_SECONDS >= 4 * 30)
 
 
 def test_canvas_rubric():
@@ -630,6 +680,7 @@ def main():
     test_audit_fixes()
     test_partial_submission_is_refused()
     test_healthz_reports_configuration()
+    test_long_job_is_not_mistaken_for_a_dead_one()
     test_canvas_rubric()
     test_upgrade_from_existing_database()
     test_stale_row_prefill()

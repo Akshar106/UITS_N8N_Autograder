@@ -405,6 +405,24 @@ def increment_grading_progress(iu_user_id, course_id, assignment_id):
     db.commit()
 
 
+def touch_grading_job(iu_user_id, course_id, assignment_id):
+    """Say the job is still alive without claiming progress.
+
+    Progress is counted per submission, but one submission can take many
+    minutes when its pages have to be transcribed. Without a heartbeat the
+    staleness check reads that silence as a dead job.
+    """
+    db = get_db()
+    db.execute(
+        """
+        UPDATE grading_jobs SET updated_at = ?
+        WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ? AND status = 'running'
+        """,
+        (_now(), iu_user_id, course_id, assignment_id),
+    )
+    db.commit()
+
+
 def finish_grading_job(iu_user_id, course_id, assignment_id, status, message=None):
     db = get_db()
     db.execute(
@@ -430,7 +448,11 @@ def get_grading_job(iu_user_id, course_id, assignment_id):
 # a gunicorn worker recycling/restart, a deploy). When that happens the job
 # row is left at status='running' forever with nothing left to finish it --
 # treat "running" with no progress in a while as dead rather than trusting it.
-STALE_JOB_SECONDS = 120
+# A running job touches updated_at every HEARTBEAT_SECONDS, so this is six
+# missed beats rather than a guess at how long work should take. It must stay
+# comfortably above the heartbeat interval: set too close, a healthy job that
+# misses one beat under load is declared dead and restarted alongside itself.
+STALE_JOB_SECONDS = 180
 
 
 def job_is_stale(job):
