@@ -285,6 +285,36 @@ def test_partial_submission_is_refused():
           any("image could not be read" in n for n in notes))
 
 
+def test_healthz_reports_configuration():
+    """/healthz must say what is running without saying any secret."""
+    import os
+    from app import create_app
+
+    print("\n-- /healthz tells an operator what is actually deployed --")
+    saved = {k: os.environ.get(k) for k in
+             ("OCR_BACKEND", "FLASK_SECRET_KEY", "REALLM_API_KEY", "APP_ENV")}
+    try:
+        os.environ.update(FLASK_SECRET_KEY="a-real-secret-value",
+                          REALLM_API_KEY="sk-a-real-api-key", APP_ENV="development")
+        os.environ.pop("OCR_BACKEND", None)
+        body = create_app().test_client().get("/healthz")
+        payload, raw = body.get_json(), body.get_data(as_text=True)
+
+        check("it still reports liveness", payload["status"] == "ok")
+        check("it reports whether image reading is on", payload["ocr_enabled"] is False)
+        check("it lists what uploads are accepted right now",
+              "png" not in payload["accepted_uploads"])
+        check("it reports that the secret key IS set", payload["secret_key_set"] is True)
+        check("it never reveals the secret key", "a-real-secret-value" not in raw)
+        check("it never reveals the API key", "sk-a-real-api-key" not in raw)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def test_canvas_rubric():
     from app import canvas_rubric
     from app.routes.rubric import _combine_rubric_sources
@@ -599,6 +629,7 @@ def main():
     test_anchor_pipeline()
     test_audit_fixes()
     test_partial_submission_is_refused()
+    test_healthz_reports_configuration()
     test_canvas_rubric()
     test_upgrade_from_existing_database()
     test_stale_row_prefill()

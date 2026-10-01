@@ -6,6 +6,7 @@ from flask_wtf.csrf import CSRFError, CSRFProtect
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from app import grading
 from app.config import Config
 from app.storage import close_db, init_db
 
@@ -123,7 +124,31 @@ def create_app():
 
     @app.route("/healthz")
     def healthz():
-        return {"status": "ok"}
+        """Liveness, plus enough configuration to tell what is actually running.
+
+        Diagnosing this deployment has repeatedly meant guessing whether a
+        change had shipped and whether a setting had taken effect. Nothing here
+        is a secret -- the two keys report only WHETHER they are set, never any
+        part of their value -- and all of it is visible to an operator in one
+        request instead of an SSH session.
+        """
+        from app import extract, ocr
+
+        return {
+            "status": "ok",
+            "app_env": app.config["APP_ENV"],
+            "secret_key_set": bool(os.getenv("FLASK_SECRET_KEY")),
+            "canvas_configured": bool(app.config["CANVAS_CLIENT_ID"]),
+            "iu_login_configured": bool(app.config["IU_OIDC_CLIENT_ID"]),
+            "llm_configured": bool(os.getenv("REALLM_API_KEY")),
+            "llm_model": os.getenv("REALLM_MODEL_NAME"),
+            "grading_passes": grading.GRADING_PASSES,
+            "ocr_backend": ocr.backend_name(),
+            "ocr_enabled": ocr.is_enabled(),
+            "ocr_vision_model": ocr.VISION_MODEL if ocr.is_enabled() else None,
+            "accepted_uploads": list(extract.supported_extensions()),
+            "database_path": app.config["DATABASE_PATH"],
+        }
 
     @app.route("/robots.txt")
     def robots():
