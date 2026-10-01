@@ -45,6 +45,7 @@ import logging
 import re
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -70,6 +71,14 @@ REQUEST_TIMEOUT = int(os.getenv("OCR_TIMEOUT", "240"))
 # One slow page should not cost a student their whole submission. The LLM client
 # has retried transient failures since the beginning; the image reader did not,
 # so a single read timeout discarded eleven pages of work.
+# Pages are transcribed concurrently. This matters more than it looks: the
+# gateway's latency has a long tail -- on a real submission two pages of eleven
+# took over 240s while the rest were quick -- so a serial run is hostage to its
+# worst pages and takes their SUM. In parallel a submission costs roughly its
+# slowest page instead. Conservative by default because the gateway's
+# concurrency limit is unknown; raise it once IU confirms what they allow.
+CONCURRENCY = max(1, int(os.getenv("OCR_CONCURRENCY", "4")))
+
 MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "3"))
 BACKOFF_SECONDS = float(os.getenv("OCR_BACKOFF_SECONDS", "3"))
 
@@ -188,10 +197,21 @@ def read_pages(images, context=""):
         )
 
     reader = _read_page_vision if BACKEND == "vision" else _read_page_azure
-    pages = []
-    for index, image in enumerate(images, start=1):
-        pages.append(_read_with_retries(reader, image, index, context))
-    return pages
+    numbered = list(enumerate(images, start=1))
+
+    if CONCURRENCY == 1 or len(numbered) == 1:
+        return [_read_with_retries(reader, image, index, context)
+                for index, image in numbered]
+
+    workers = min(CONCURRENCY, len(numbered))
+    logger.info("Transcribing %d pages, %d at a time", len(numbered), workers)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        # map keeps input order, so pages come back in page order however they
+        # finish. An OCRError from any page surfaces when its result is read,
+        # and the submission is refused rather than graded with a hole in it.
+        return list(pool.map(
+            lambda pair: _read_with_retries(reader, pair[1], pair[0], context),
+            numbered))
 
 
 def _read_with_retries(reader, image, index, context):

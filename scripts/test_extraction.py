@@ -589,6 +589,71 @@ def test_vision_gateway_shape():
         _restore()
 
 
+def test_pages_are_transcribed_in_parallel():
+    """Serial transcription is hostage to its slowest page.
+
+    Measured on a real submission: two pages of eleven took over 240s while the
+    rest were quick, and the whole thing ran about ten minutes. In parallel the
+    cost is roughly the slowest page rather than the sum.
+    """
+    import importlib
+    import time
+    from unittest import mock
+    import app.ocr
+
+    print("\n-- pages are read concurrently, in page order --")
+    os.environ["OCR_BACKEND"] = "vision"
+    importlib.reload(app.ocr)
+    o = app.ocr
+    try:
+        check("concurrency is on by default but conservative", 1 < o.CONCURRENCY <= 8)
+
+        slow = {2, 11}
+
+        def fake(image, index, context):
+            time.sleep(0.6 if index in slow else 0.05)
+            return o.PageText(index, f"page {index}")
+
+        images = [b"x"] * 11
+        with mock.patch.object(o, "_read_page_vision", side_effect=fake):
+            o.CONCURRENCY = 1
+            start = time.time()
+            serial = o.read_pages(images, "ctx")
+            serial_time = time.time() - start
+
+            o.CONCURRENCY = 4
+            start = time.time()
+            parallel = o.read_pages(images, "ctx")
+            parallel_time = time.time() - start
+
+        check("every page still comes back",
+              len(parallel) == 11 and len(serial) == 11)
+        check("pages stay in page order however they finish",
+              [p.index for p in parallel] == list(range(1, 12)))
+        check("the text belongs to the right page",
+              all(p.text == f"page {p.index}" for p in parallel))
+        check(f"parallel is faster ({parallel_time:.2f}s vs {serial_time:.2f}s)",
+              parallel_time < serial_time * 0.75)
+
+        # A page that truly cannot be read must still sink the submission
+        # rather than leaving a hole the grader would read as a blank answer.
+        def one_bad(image, index, context):
+            if index == 5:
+                raise o.OCRError("page 5 unreadable")
+            return o.PageText(index, "ok")
+
+        o.CONCURRENCY = 4
+        with mock.patch.object(o, "_read_page_vision", side_effect=one_bad):
+            try:
+                o.read_pages(images, "ctx")
+                check("one unreadable page still refuses the submission", False)
+            except o.OCRError as exc:
+                check("one unreadable page still refuses the submission",
+                      "page 5" in str(exc))
+    finally:
+        _restore()
+
+
 def test_transcription_prompt():
     print("\n-- the transcription prompt defends against a helpful reader --")
     from app import ocr as o
@@ -679,6 +744,7 @@ def main():
     test_handwriting_off_by_default()
     test_handwriting_transcription()
     test_vision_gateway_shape()
+    test_pages_are_transcribed_in_parallel()
     test_transcription_prompt()
     test_refusals()
     test_text_entry()

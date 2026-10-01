@@ -152,6 +152,7 @@ def create_app():
             "ocr_backend": ocr.backend_name(),
             "ocr_enabled": ocr.is_enabled(),
             "ocr_vision_model": ocr.VISION_MODEL if ocr.is_enabled() else None,
+            "ocr_concurrency": ocr.CONCURRENCY,
             "accepted_uploads": list(extract.supported_extensions()),
             "database_path": app.config["DATABASE_PATH"],
         }

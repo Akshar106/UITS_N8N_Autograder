@@ -245,10 +245,14 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                         submission_attempt=attempt, submitted_at=submitted_at,
                     )
                 else:
+                    # A transcribed submission is forced to low confidence and
+                    # sent to a human whatever the passes say, so the second
+                    # pass buys a disagreement signal nobody acts on -- and it
+                    # doubles the slowest part of an already slow run.
                     result = grading.grade_submission(
                         rubric["assignment_name"], rubric["rubric_text"], student_id, student_text,
                         expected_criteria=expected_criteria, expected_total=expected_total,
-                        anchors=anchors,
+                        anchors=anchors, passes=1 if from_ocr else None,
                     )
                     if result["ok"]:
                         data = result["data"]
