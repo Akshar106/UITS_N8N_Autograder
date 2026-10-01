@@ -226,8 +226,17 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                 except Exception as exc:  # noqa: BLE001 -- reported on the row, not raised
                     current_app.logger.warning("Canvas token unavailable mid-run: %s", exc)
 
+                def on_page(done, total, who=student_name):
+                    # Shown on the review page while it works. "0 of 1
+                    # submissions" for ten minutes is indistinguishable from a
+                    # crash; "reading page 7 of 11" is not.
+                    storage.touch_grading_job(
+                        iu_user_id, course_id, assignment_id,
+                        message=f"Reading {who}'s submission: page {done} of {total}")
+
                 student_text, submission_filename, extraction_error, extraction_notes, from_ocr = \
-                    _extract_submission_text(submission, access_token, rubric["assignment_name"])
+                    _extract_submission_text(submission, access_token, rubric["assignment_name"],
+                                             progress=on_page)
                 notes_text = "\n".join(extraction_notes) or None
 
                 # Canvas bumps `attempt` on every resubmission. Storing it is what
@@ -319,7 +328,7 @@ def _build_anchor_examples(iu_user_id, course_id, assignment_id, submissions, ac
     return grading.select_anchor_examples(candidates)
 
 
-def _extract_submission_text(submission, access_token, assignment_name=""):
+def _extract_submission_text(submission, access_token, assignment_name="", progress=None):
     """Return (text, filenames, error, notes, from_ocr) for one Canvas submission.
 
     notes are warnings about *how well* the file was read -- images that could
@@ -344,7 +353,8 @@ def _extract_submission_text(submission, access_token, assignment_name=""):
             filename = attachment.get("filename", "file")
             try:
                 content = canvas_client.download_attachment(attachment["url"], access_token)
-                document = extract.extract_document(filename, content, assignment_name)
+                document = extract.extract_document(filename, content, assignment_name,
+                                                    progress=progress)
             except (canvas_client.CanvasAPIError, extract.ExtractionError) as exc:
                 problems.append(f"[Could not read {filename}: {exc}]")
                 continue

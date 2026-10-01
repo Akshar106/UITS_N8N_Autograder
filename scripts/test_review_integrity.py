@@ -253,7 +253,7 @@ def test_partial_submission_is_refused():
     def download(url, token=None):
         return b"x" if url.endswith("1") else b"def my_sort(A):\n    return A\n"
 
-    def extract_document(filename, content, assignment_name=""):
+    def extract_document(filename, content, assignment_name="", progress=None):
         if filename.endswith(".pdf"):
             raise extract.ExtractionError("transcribing its pages failed: read timed out")
         document = extract.Extracted()
@@ -272,7 +272,7 @@ def test_partial_submission_is_refused():
           "problem1.py" in (filenames or ""))
 
     # The other direction must still work: warnings are not failures.
-    def extract_with_warning(filename, content, assignment_name=""):
+    def extract_with_warning(filename, content, assignment_name="", progress=None):
         document = extract.Extracted()
         document.text = content.decode()
         document.notes.append("1 image could not be read")
@@ -363,6 +363,21 @@ def test_long_job_is_not_mistaken_for_a_dead_one():
 
         check("the window is comfortably above the heartbeat interval",
               storage.STALE_JOB_SECONDS >= 4 * 30)
+
+        # "0 of 1 submissions" for ten minutes is indistinguishable from a
+        # crash. Saying which page it is on is the difference between a user
+        # waiting and a user clicking Grade again, which starts a second job.
+        storage.start_grading_job(user, course, assignment, total=1)
+        storage.touch_grading_job(user, course, assignment,
+                                  message="Reading Test Student's submission: page 7 of 11")
+        job = storage.get_grading_job(user, course, assignment)
+        check("the job says which page it is on", "page 7 of 11" in (job["message"] or ""))
+        check("reporting a page does not count as progress", job["done"] == 0)
+
+        storage.touch_grading_job(user, course, assignment)
+        check("a bare heartbeat leaves the note alone",
+              "page 7 of 11" in
+              (storage.get_grading_job(user, course, assignment)["message"] or ""))
 
 
 def test_canvas_rubric():

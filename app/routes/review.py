@@ -98,6 +98,7 @@ def review_queue(course_id, assignment_id):
         sort=sort,
         job=job,
         job_stale=job_stale,
+        stale_after=storage.STALE_JOB_SECONDS,
     )
 
 

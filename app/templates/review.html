@@ -10,13 +10,17 @@
 
   {% if job and job.status == 'running' and job_stale %}
     <div class="flash flash-error">
-      Grading appears to have stopped unexpectedly (no progress for over two minutes, likely a server restart
-      partway through). It stopped at {{ job.done }} of {{ job.total }} submissions.
+      Grading appears to have stopped unexpectedly &mdash; no progress for over
+      {{ (stale_after / 60)|round|int }} minutes, which usually means the server restarted partway through.
+      It stopped at {{ job.done }} of {{ job.total }} submissions{% if job.message %}, while {{ job.message[0]|lower }}{{ job.message[1:] }}{% endif %}.
       <a href="{{ url_for('rubric.upload_rubric', course_id=course_id, assignment_id=assignment_id) }}">Go back and click "Grade all submissions" again</a> to pick up where it left off.
     </div>
   {% elif job and job.status == 'running' %}
     <div class="flash flash-success">
-      Grading in progress: {{ job.done }} of {{ job.total }} submissions done. This page refreshes automatically every few seconds.
+      Grading in progress: {{ job.done }} of {{ job.total }} submissions done.{% if job.message %}
+      <br><strong>{{ job.message }}</strong>{% endif %}
+      This page refreshes automatically every few seconds. Reading a handwritten
+      submission takes a few minutes, so a single row can sit here a while.
     </div>
   {% elif job and job.status == 'error' %}
     <div class="flash flash-error">

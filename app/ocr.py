@@ -41,9 +41,11 @@ Backends, chosen with OCR_BACKEND:
           before enabling it.
 """
 import base64
+import itertools
 import logging
 import re
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -183,12 +185,16 @@ class PageText:
         return self.text.count("[illegible]") + self.text.count("[?")
 
 
-def read_pages(images, context=""):
+def read_pages(images, context="", progress=None):
     """Transcribe page images. Returns [PageText]; raises OCRError if it cannot.
 
     `images` is a list of raw image bytes, in page order. `context` is a short
     hint (the assignment name) that helps a vision model with proper nouns and
     notation; it must never contain an answer.
+
+    `progress(done, total)` is called as each page lands. A submission can take
+    minutes, and without it the only thing anyone can see is that nothing has
+    happened yet -- which is indistinguishable from a crash.
     """
     if not is_enabled():
         raise OCRError(
@@ -206,9 +212,20 @@ def read_pages(images, context=""):
     reader = _read_page_vision if BACKEND == "vision" else _read_page_azure
     numbered = list(enumerate(images, start=1))
 
-    if CONCURRENCY == 1 or len(numbered) == 1:
-        return [_read_with_retries(reader, image, index, context)
-                for index, image in numbered]
+    total = len(numbered)
+    done = itertools.count(1)
+    lock = threading.Lock()
+
+    def read_one(pair):
+        index, image = pair
+        page = _read_with_retries(reader, image, index, context)
+        if progress:
+            with lock:
+                progress(next(done), total)
+        return page
+
+    if CONCURRENCY == 1 or total == 1:
+        return [read_one(pair) for pair in numbered]
 
     workers = min(CONCURRENCY, len(numbered))
     logger.info("Transcribing %d pages, %d at a time", len(numbered), workers)
@@ -216,9 +233,7 @@ def read_pages(images, context=""):
         # map keeps input order, so pages come back in page order however they
         # finish. An OCRError from any page surfaces when its result is read,
         # and the submission is refused rather than graded with a hole in it.
-        return list(pool.map(
-            lambda pair: _read_with_retries(reader, pair[1], pair[0], context),
-            numbered))
+        return list(pool.map(read_one, numbered))
 
 
 def _read_with_retries(reader, image, index, context):

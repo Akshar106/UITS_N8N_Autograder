@@ -405,7 +405,7 @@ def increment_grading_progress(iu_user_id, course_id, assignment_id):
     db.commit()
 
 
-def touch_grading_job(iu_user_id, course_id, assignment_id):
+def touch_grading_job(iu_user_id, course_id, assignment_id, message=None):
     """Say the job is still alive without claiming progress.
 
     Progress is counted per submission, but one submission can take many
@@ -413,13 +413,22 @@ def touch_grading_job(iu_user_id, course_id, assignment_id):
     staleness check reads that silence as a dead job.
     """
     db = get_db()
-    db.execute(
-        """
-        UPDATE grading_jobs SET updated_at = ?
-        WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ? AND status = 'running'
-        """,
-        (_now(), iu_user_id, course_id, assignment_id),
-    )
+    if message is None:
+        db.execute(
+            """
+            UPDATE grading_jobs SET updated_at = ?
+            WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ? AND status = 'running'
+            """,
+            (_now(), iu_user_id, course_id, assignment_id),
+        )
+    else:
+        db.execute(
+            """
+            UPDATE grading_jobs SET updated_at = ?, message = ?
+            WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ? AND status = 'running'
+            """,
+            (_now(), message, iu_user_id, course_id, assignment_id),
+        )
     db.commit()
 
 
