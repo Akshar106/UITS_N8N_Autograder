@@ -134,8 +134,14 @@ def create_app():
         """
         from app import extract, ocr
 
+        try:
+            from app._version import VERSION
+        except ImportError:
+            VERSION = "dev"  # running from a checkout, not a packaged build
+
         return {
             "status": "ok",
+            "version": VERSION,
             "app_env": app.config["APP_ENV"],
             "secret_key_set": bool(os.getenv("FLASK_SECRET_KEY")),
             "canvas_configured": bool(app.config["CANVAS_CLIENT_ID"]),

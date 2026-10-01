@@ -13,3 +13,6 @@ autograder.json
 
 # Build artifact from scripts/make_deploy_zip.py, rebuilt on every deploy.
 app.zip
+
+# Stamped into every deployment package by scripts/make_deploy_zip.py.
+app/_version.py

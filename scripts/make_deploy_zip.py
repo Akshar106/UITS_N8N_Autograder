@@ -20,6 +20,7 @@ named here does not go, which fails safe when a new file appears in the root.
 The result is byte-identical to what the app needs and nothing more; Oryx
 installs requirements.txt on the Azure side as it does today.
 """
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -70,7 +71,29 @@ def collect():
     return members
 
 
+def stamp_version():
+    """Write the commit being packaged so /healthz can report it.
+
+    Diagnosing this deployment has repeatedly stalled on not knowing whether a
+    fix had actually shipped. A build that cannot name itself makes every
+    symptom ambiguous.
+    """
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT,
+                             capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_ROOT,
+                               capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        sha, dirty = "unknown", ""
+    version = sha + ("+local-changes" if dirty else "")
+    (REPO_ROOT / "app" / "_version.py").write_text(
+        '"""Written by scripts/make_deploy_zip.py. Not edited by hand."""\n'
+        f'VERSION = "{version}"\n')
+    return version
+
+
 def main():
+    version = stamp_version()
     members = collect()
 
     # A last check rather than a comment: the point of the whitelist is that
@@ -86,7 +109,8 @@ def main():
             archive.write(path, path.relative_to(REPO_ROOT))
 
     size = TARGET.stat().st_size
-    print(f"{TARGET.relative_to(REPO_ROOT)}: {len(members)} files, {size // 1024} KB")
+    print(f"{TARGET.relative_to(REPO_ROOT)}: {len(members)} files, {size // 1024} KB, "
+          f"version {version}")
     print("  excluded: .env, instance/, .venv/, __pycache__/, *.pyc, *.sqlite3")
     print("\nDeploy it with:")
     print("  az webapp deploy --resource-group <rg> --name <app> "
