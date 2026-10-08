@@ -138,6 +138,18 @@ class OCRError(Exception):
     """Reading failed. The caller must refuse to grade, not grade a blank."""
 
 
+class TransientOCRError(OCRError):
+    """The reader did not answer. Worth asking again before giving up.
+
+    Kept apart from OCRError because the two deserve opposite treatment and
+    were getting the same one: a gateway 503, or a reply with no text in it,
+    used to refuse the page outright and therefore the whole submission, with
+    no second attempt -- while a timeout, which is no more transient than
+    either, was retried three times. A student lost a graded submission to a
+    single empty response.
+    """
+
+
 # The instruction that decides whether a transcript is evidence or fiction.
 TRANSCRIPTION_PROMPT = """\
 You are transcribing a page of a student's handwritten or scanned assignment so \
@@ -317,14 +329,27 @@ def _read_with_retries(reader, image, index, context):
 
     A timeout or a dropped connection on one page is not a verdict on the
     submission, and without this the first slow page throws the other ten away.
-    An OCRError is not retried: it means the reader answered and could not do
-    the job, which a second identical request will not change.
+    Neither is a 503, nor a reply that came back with no text in it -- both of
+    which used to refuse the page on the first attempt while a timeout got
+    three, and refusing one page refuses the whole submission. A real
+    submission was lost that way: "the model returned nothing for this page",
+    on page 2 of 11, with no second attempt made.
+
+    A plain OCRError is still final. It means the reader answered and could
+    not do the job -- a transcript cut off at the token limit, a page that
+    looped -- and an identical request produces an identical answer.
     """
     last_error = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             with _GATEWAY_SLOTS:
                 return reader(image, index, context)
+        except TransientOCRError as exc:
+            last_error = exc
+            logger.warning("Page %d transcription attempt %d/%d gave no usable "
+                           "answer: %s", index, attempt, MAX_ATTEMPTS, exc)
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(BACKOFF_SECONDS * (2 ** (attempt - 1)))
         except OCRError:
             raise
         except requests.RequestException as exc:
@@ -334,8 +359,7 @@ def _read_with_retries(reader, image, index, context):
             if attempt < MAX_ATTEMPTS:
                 time.sleep(BACKOFF_SECONDS * (2 ** (attempt - 1)))
     raise OCRError(
-        f"Could not reach the image reader for page {index} after "
-        f"{MAX_ATTEMPTS} attempts: {last_error}")
+        f"Could not read page {index} after {MAX_ATTEMPTS} attempts: {last_error}")
 
 
 # --- the ReaLLM gateway, with a vision-capable model --------------------------
@@ -443,6 +467,10 @@ def _read_page_vision(image, index, context):
         raise OCRError("OCR_BACKEND=vision but REALLM_URL / model name are not configured.")
 
     last_error = None
+    # Whether the last thing that went wrong is worth another attempt. A 503
+    # or an empty reply is; a transcript cut off at the token limit is not,
+    # since an identical request would be cut off in the same place.
+    transient = False
     for content in _vision_payloads(image, index, context):
         response = requests.post(
             url,
@@ -471,12 +499,25 @@ def _read_page_vision(image, index, context):
         )
         if response.status_code != 200:
             last_error = f"{response.status_code}: {response.text[:200]}"
+            # A gateway that is overloaded, rate-limiting or restarting says
+            # so in the status code, and saying it once is not a verdict on
+            # the page. A 4xx other than 429 is our own request being wrong,
+            # which asking again will not mend.
+            transient = response.status_code == 429 or response.status_code >= 500
             continue
         try:
             choice = response.json()["choices"][0]
             message = choice["message"]
-            text = (message.get("content") or "").strip()
             finish_reason = choice.get("finish_reason")
+            text = (message.get("content") or "").strip()
+            if not text:
+                # Some models on this gateway answer in reasoning_content and
+                # leave content empty. app/llm_client.py has read both fields
+                # since the beginning; this one only ever read `content`, and
+                # so reported "the model returned nothing" for a page the
+                # model had in fact transcribed.
+                reasoning = message.get("reasoning_content")
+                text = (reasoning or "").strip() if isinstance(reasoning, str) else ""
         except (ValueError, KeyError, IndexError) as exc:
             last_error = f"unparseable response ({exc})"
             continue
@@ -504,8 +545,13 @@ def _read_page_vision(image, index, context):
             # No per-word confidence from a chat model; the markers it was asked
             # to leave are the only uncertainty signal available.
             return PageText(index, strip_doctags(text))
-        last_error = "the model returned nothing for this page"
+        last_error = (f"the model returned nothing for this page "
+                      f"(finish_reason={finish_reason!r})")
+        transient = True
 
+    if transient:
+        # Ask again rather than losing the submission over one blank answer.
+        raise TransientOCRError(f"Image reading failed on page {index} ({last_error}).")
     raise OCRError(f"Image reading failed on page {index} ({last_error}).")
 
 

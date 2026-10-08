@@ -589,6 +589,114 @@ def test_vision_gateway_shape():
         _restore()
 
 
+def test_an_empty_reply_is_retried_not_fatal():
+    """The failure that cost a real submission: "the model returned nothing".
+
+    It happened on page 2 of 11. One page refusing refuses the whole
+    submission -- deliberately, so that a partial read is never graded as a
+    whole one -- but this page was never asked a second time. A timeout got
+    three attempts; an empty reply and a 503 got one each, though neither is
+    any more a verdict on the page than a timeout is.
+
+    The other half of it: this gateway answers in reasoning_content for some
+    models and leaves content empty. app/llm_client.py has read both fields
+    since the beginning. The transcriber read only content, so a page the
+    model HAD transcribed was reported as nothing at all.
+    """
+    import importlib
+    from unittest import mock
+
+    import app.ocr
+
+    print("\n-- a page with no answer is asked again, not written off --")
+    os.environ["OCR_BACKEND"] = "vision"
+    os.environ["REALLM_URL"] = "https://example.invalid/v1/chat/completions"
+    os.environ["REALLM_API_KEY"] = "test-only"
+    os.environ["OCR_BACKOFF_SECONDS"] = "0"
+    importlib.reload(app.ocr)
+    o = app.ocr
+
+    class Reply:
+        def __init__(self, status=200, content="", finish="stop", reasoning=None):
+            self.status_code = status
+            message = {"content": content}
+            if reasoning is not None:
+                message["reasoning_content"] = reasoning
+            self._body = {"choices": [{"message": message, "finish_reason": finish}]}
+            self.text = "server error"
+
+        def json(self):
+            return self._body
+
+    try:
+        # The gateway answered in the other field.
+        with mock.patch.object(
+                o.requests, "post",
+                side_effect=lambda *a, **k: Reply(content="", reasoning="A BST keeps smaller values left.")):
+            page = o._read_page_vision(b"\x89PNG", 1, "ctx")
+        check("a reply carried in reasoning_content is read, not discarded",
+              "smaller values" in page.text)
+
+        # Empty once, then fine: exactly the real failure, retried.
+        calls = []
+
+        def flaky(*_a, **_k):
+            calls.append(1)
+            if len(calls) == 1:
+                return Reply(content="")
+            return Reply(content="Problem 2. Merge sort is O(n lg n).")
+
+        with mock.patch.object(o.requests, "post", side_effect=flaky):
+            page = o._read_with_retries(o._read_page_vision, b"\x89PNG", 2, "ctx")
+        check("an empty reply is asked again", len(calls) == 2)
+        check("the second answer is used", "Merge sort" in page.text)
+
+        # A 503 is the gateway's problem, not the page's.
+        calls.clear()
+
+        def unavailable(*_a, **_k):
+            calls.append(1)
+            if len(calls) < 3:
+                return Reply(status=503)
+            return Reply(content="Problem 3. The recurrence solves to O(n).")
+
+        with mock.patch.object(o.requests, "post", side_effect=unavailable):
+            page = o._read_with_retries(o._read_page_vision, b"\x89PNG", 3, "ctx")
+        check("a 503 is retried rather than refusing the submission", len(calls) == 3)
+        check("the page is read once the gateway recovers", "O(n)" in page.text)
+
+        # But a request that is simply wrong must not be repeated.
+        calls.clear()
+        with mock.patch.object(o.requests, "post",
+                               side_effect=lambda *a, **k: (calls.append(1), Reply(status=400))[1]):
+            try:
+                o._read_with_retries(o._read_page_vision, b"\x89PNG", 4, "ctx")
+            except o.OCRError:
+                pass
+        check("a 400 is not retried, because asking again cannot fix it",
+              len(calls) == 1)
+
+        # Still gives up eventually, rather than retrying for ever.
+        calls.clear()
+        with mock.patch.object(o.requests, "post",
+                               side_effect=lambda *a, **k: (calls.append(1), Reply(content=""))[1]):
+            try:
+                o._read_with_retries(o._read_page_vision, b"\x89PNG", 5, "ctx")
+                check("an always-empty page still fails in the end", False)
+            except o.OCRError as exc:
+                message = str(exc)
+                check("an always-empty page still fails in the end", True)
+                check("and says how many attempts were made",
+                      str(o.MAX_ATTEMPTS) in message)
+                check("the error names the finish_reason, so the next failure "
+                      "is diagnosable", "finish_reason" in message)
+        check("it stops at the attempt limit", len(calls) == o.MAX_ATTEMPTS)
+    finally:
+        for key in ("REALLM_URL", "REALLM_API_KEY", "OCR_BACKOFF_SECONDS"):
+            os.environ.pop(key, None)
+        _restore()
+
+
 def test_runaway_generation_is_bounded_and_detected():
     """A page that sends the model into a loop must not cost 240s, or be graded.
 
@@ -997,6 +1105,7 @@ def main():
     test_handwriting_off_by_default()
     test_handwriting_transcription()
     test_vision_gateway_shape()
+    test_an_empty_reply_is_retried_not_fatal()
     test_runaway_generation_is_bounded_and_detected()
     test_pages_are_transcribed_in_parallel()
     test_transcription_resumes_after_a_kill()
