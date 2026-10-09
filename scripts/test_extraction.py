@@ -443,7 +443,7 @@ def _with_backend(name, transcript):
     os.environ["OCR_BACKEND"] = name
     importlib.reload(app.ocr)
     importlib.reload(app.extract)
-    reader = lambda image, index, context: app.ocr.PageText(index, transcript)  # noqa: E731
+    reader = lambda image, index, context, **kwargs: app.ocr.PageText(index, transcript)  # noqa: E731
     return app.ocr, app.extract, mock.patch.object(app.ocr, "_read_page_vision", side_effect=reader)
 
 
@@ -542,7 +542,7 @@ def test_handwriting_transcription():
                       "reader unavailable" in str(exc))
 
         with mock.patch.object(ocr, "_read_page_vision",
-                               side_effect=lambda i, n, c: ocr.PageText(n, "")):
+                               side_effect=lambda i, n, c, **kwargs: ocr.PageText(n, "")):
             try:
                 ex.extract_document("page.png", _png())
                 check("an empty transcript refuses instead of grading a blank", False)
@@ -754,15 +754,35 @@ def test_runaway_generation_is_bounded_and_detected():
             f"Step {i}: substituting the bound from step {i - 1} gives "
             f"T(n) <= {i}n lg n + {i * 3}n, which is still O(n lg n)."
             for i in range(1, 40))
-        with mock.patch.object(o.requests, "post",
-                               side_effect=lambda *a, **k: Reply(long_page, "length")):
+        budgets = []
+
+        def truncating(*_a, **kwargs):
+            budgets.append((kwargs.get("json") or {}).get("max_tokens"))
+            return Reply(long_page, "length")
+
+        with mock.patch.object(o.requests, "post", side_effect=truncating):
             try:
                 o._read_page_vision(b"\x89PNG", 2, "ctx")
                 check("a truncated page is not accepted as complete", False)
-            except o.OCRError as exc:
+            except o.TransientOCRError:
                 check("a truncated page is not accepted as complete", True)
-                check("the refusal names the setting that would allow more",
-                      "OCR_MAX_OUTPUT_TOKENS" in str(exc))
+
+            # It is asked again with more room before anything is refused. A
+            # fixed ceiling refused a real submission whose page needed about
+            # 250 tokens and had produced 2000 -- ample room, and refusing was
+            # still the wrong answer.
+            budgets.clear()
+            try:
+                o._read_with_retries(o._read_page_vision, b"\x89PNG", 2, "ctx")
+                check("a page that never finishes is refused in the end", False)
+            except o.OCRError as exc:
+                check("a page that never finishes is refused in the end", True)
+                check("the refusal says what actually happened, not 'raise the limit'",
+                      "without finishing" in str(exc))
+        check(f"each attempt gets more room than the last ({budgets})",
+              len(budgets) == o.MAX_ATTEMPTS and budgets[1] > budgets[0])
+        check("the widening stops at a ceiling",
+              max(budgets) <= o.MAX_OUTPUT_TOKENS_CEILING)
 
         # A repetition loop is a different failure and says so, because the
         # answer is a better scan, not a higher token limit.
@@ -845,7 +865,7 @@ def test_pages_are_transcribed_in_parallel():
 
         slow = {2, 11}
 
-        def fake(image, index, context):
+        def fake(image, index, context, **kwargs):
             time.sleep(0.6 if index in slow else 0.05)
             return o.PageText(index, f"page {index}")
 
@@ -872,7 +892,7 @@ def test_pages_are_transcribed_in_parallel():
 
         # A page that truly cannot be read must still sink the submission
         # rather than leaving a hole the grader would read as a blank answer.
-        def one_bad(image, index, context):
+        def one_bad(image, index, context, **kwargs):
             if index == 5:
                 raise o.OCRError("page 5 unreadable")
             return o.PageText(index, "ok")
@@ -919,7 +939,7 @@ def test_transcription_resumes_after_a_kill():
 
         read = []
 
-        def reader(image, index, context):
+        def reader(image, index, context, **kwargs):
             read.append(index)
             return o.PageText(index, f"text {index}")
 
@@ -1016,7 +1036,7 @@ def test_long_scan_is_refused_not_truncated():
         limit = ocr.MAX_PAGES
         read = []
 
-        def counting_reader(image, index, context):
+        def counting_reader(image, index, context, **kwargs):
             read.append(index)
             return ocr.PageText(index, TRANSCRIPT)
 

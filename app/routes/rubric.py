@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
@@ -162,7 +163,42 @@ def run_grading(course_id, assignment_id):
 
 # How often a running job says it is still alive. Short enough that a real
 # death is noticed quickly, long enough to be nothing in database terms.
-HEARTBEAT_SECONDS = 30
+#
+# Ten rather than thirty, because what matters is not the interval but how
+# many chances there are to land a write before the job is declared dead.
+# Measured under a roster's write load, beats were delayed to six and a half
+# times their interval and two thirds of them never landed at all -- at
+# thirty seconds against a 180s window that is a 196s gap, so a perfectly
+# healthy job gets reported dead and restarted alongside itself. The same
+# window now covers eighteen beats instead of six, and the write itself is
+# one tiny UPDATE.
+HEARTBEAT_SECONDS = int(os.getenv("GRADING_HEARTBEAT_SECONDS", "10"))
+
+
+class _RateLimiter:
+    """Let a cosmetic write through at most once per interval, per key.
+
+    Progress messages are the loudest writer in a grading run -- one per page
+    per submission, from every transcription thread at once -- and they say
+    nothing a human reads more than once a second. Their volume is what makes
+    the liveness write compete for a lock it should never have to fight for.
+    """
+
+    def __init__(self, interval=1.0):
+        self._interval = interval
+        self._last = {}
+        self._lock = threading.Lock()
+
+    def ready(self, key):
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last.get(key, 0.0) < self._interval:
+                return False
+            self._last[key] = now
+            return True
+
+
+_PROGRESS_LIMITER = _RateLimiter()
 
 # How many submissions are graded at once. This is where a roster's time goes:
 # one submission may take seconds, but a hundred in a queue do not.
@@ -303,6 +339,14 @@ def _grade_submission_row(app, iu_user_id, course_id, assignment_id, rubric, sub
     def on_page(done, total):
         # Shown on the review page while it works. A count that does not move
         # for minutes is indistinguishable from a crash; a page number is not.
+        #
+        # Throttled, because this is cosmetic and it was not free: every page
+        # of every submission wrote to the database, and with a roster's worth
+        # of transcription threads that write storm is what starved the
+        # heartbeat into missing its window. Nobody reads a progress line more
+        # than once a second.
+        if not _PROGRESS_LIMITER.ready(f"{iu_user_id}/{course_id}/{assignment_id}"):
+            return
         with app.app_context():
             storage.touch_grading_job(
                 iu_user_id, course_id, assignment_id,

@@ -130,6 +130,11 @@ def set_concurrency(limit, max_in_flight=None):
 # silently accepted: see the finish_reason handling in _read_page_vision.
 MAX_OUTPUT_TOKENS = int(os.getenv("OCR_MAX_OUTPUT_TOKENS", "2000"))
 
+# The widest a later attempt may go. Past this a page is refused rather
+# than read, because a reply this long is no longer a transcript of one
+# page however varied its text is.
+MAX_OUTPUT_TOKENS_CEILING = int(os.getenv("OCR_MAX_OUTPUT_TOKENS_CEILING", "12000"))
+
 MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "3"))
 BACKOFF_SECONDS = float(os.getenv("OCR_BACKOFF_SECONDS", "3"))
 
@@ -343,7 +348,12 @@ def _read_with_retries(reader, image, index, context):
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             with _GATEWAY_SLOTS:
-                return reader(image, index, context)
+                # Both readers take `attempt`; the vision one widens its token
+                # budget with it. Passed positionally-by-name rather than
+                # probed for, because catching the TypeError from a missing
+                # argument would also catch one raised inside the reader and
+                # silently run it twice.
+                return reader(image, index, context, attempt=attempt)
         except TransientOCRError as exc:
             last_error = exc
             logger.warning("Page %d transcription attempt %d/%d gave no usable "
@@ -460,11 +470,24 @@ def looks_degenerate(text, min_length=400):
     return False
 
 
-def _read_page_vision(image, index, context):
+def token_budget(attempt):
+    """How much room to give the transcriber on this attempt.
+
+    The first attempt is sized for a page, not for the worst case, because a
+    cap is what stops a model that will not stop. Later attempts widen it, so
+    a page that genuinely is long is read rather than refused -- which is the
+    mistake a single fixed ceiling made: 2000 tokens was ample for the page
+    that hit it, and refusing was still the wrong answer.
+    """
+    return min(MAX_OUTPUT_TOKENS * (3 ** (attempt - 1)), MAX_OUTPUT_TOKENS_CEILING)
+
+
+def _read_page_vision(image, index, context, attempt=1):
     url = os.getenv("REALLM_URL")
     key = os.getenv("REALLM_API_KEY")
     if not url or not VISION_MODEL:
         raise OCRError("OCR_BACKEND=vision but REALLM_URL / model name are not configured.")
+    budget = token_budget(attempt)
 
     last_error = None
     # Whether the last thing that went wrong is worth another attempt. A 503
@@ -493,7 +516,7 @@ def _read_page_vision(image, index, context):
                 # page needs. Two such pages were 83% of the time to read a
                 # real 11-page submission. Generous, not tight: being cut off
                 # is detected below rather than quietly accepted.
-                "max_tokens": MAX_OUTPUT_TOKENS,
+                "max_tokens": budget,
             },
             timeout=REQUEST_TIMEOUT,
         )
@@ -532,10 +555,19 @@ def _read_page_vision(image, index, context):
                     f"Page {index} sent the transcriber into a repetition loop, so "
                     f"it was not read. A clearer scan of this page would help."
                 )
+            # Worth asking again with more room. A page of handwriting is a
+            # few hundred tokens, so hitting a four-figure ceiling usually
+            # means the model ran on rather than that the page is long -- but
+            # "usually" is not good enough to refuse a student's work on, and
+            # the next attempt gets a bigger budget before anything is
+            # refused. The advice this used to give was simply wrong: it told
+            # the reader to raise the limit on a page needing ~250 tokens
+            # that had produced 2000.
             last_error = (
-                f"the transcript was cut off at the {MAX_OUTPUT_TOKENS}-token limit; "
-                f"raise OCR_MAX_OUTPUT_TOKENS if pages are genuinely this long"
+                f"the transcriber produced more than {budget} tokens for this page "
+                f"without finishing, where a page of handwriting is a few hundred"
             )
+            transient = True
             continue
 
         # No repetition check on a reply that ended by itself. A model that
@@ -564,7 +596,7 @@ AZURE_POLL_SECONDS = float(os.getenv("AZURE_DI_POLL_SECONDS", "1.5"))
 AZURE_POLL_ATTEMPTS = int(os.getenv("AZURE_DI_POLL_ATTEMPTS", "40"))
 
 
-def _read_page_azure(image, index, context):
+def _read_page_azure(image, index, context, attempt=1):
     if not AZURE_ENDPOINT or not AZURE_KEY:
         raise OCRError("OCR_BACKEND=azure but AZURE_DI_ENDPOINT / AZURE_DI_KEY are not set.")
 

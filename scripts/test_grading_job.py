@@ -230,7 +230,7 @@ def _measure_in_flight(submissions, pages, page_seconds=0.05):
     peak = 0
     lock = threading.Lock()
 
-    def reader(image, index, context):
+    def reader(image, index, context, **kwargs):
         nonlocal in_flight, peak
         with lock:
             in_flight += 1
@@ -521,8 +521,59 @@ def test_anchors_are_chosen_before_they_are_read():
           all(a["text"] for a in anchors))
 
 
+def test_a_healthy_job_is_not_declared_dead_under_load():
+    """A running job must keep saying so while a roster hammers the database.
+
+    It did not. Progress wrote to the database once per page per submission,
+    from every transcription thread at once, and the liveness write had to win
+    a lock against that storm. Measured, beats were delayed to six and a half
+    times their interval and two thirds never landed -- at a 30s interval
+    against a 180s window, a 196s gap. The job was reported dead, the faculty
+    member restarted it, and it had been working the whole time.
+    """
+    import time
+
+    from app import storage
+    from app.routes import rubric as rubric_module
+
+    print("\n-- a working job keeps proving it is alive --")
+
+    beats = rubric_module.HEARTBEAT_SECONDS
+    window = storage.STALE_JOB_SECONDS
+    check(f"the stale window covers many beats, not a handful "
+          f"({window}s / {beats}s = {window // beats})",
+          window // beats >= 12)
+
+    limiter = rubric_module._RateLimiter(interval=0.2)
+    key = "owner/course/assignment"
+    allowed = sum(1 for _ in range(500) if limiter.ready(key))
+    check(f"a burst of progress writes collapses to one ({allowed})", allowed == 1)
+    time.sleep(0.25)
+    check("the next one is allowed once the interval passes", limiter.ready(key))
+    check("a different job is limited separately", limiter.ready("other/c/a"))
+
+    # The limiter is shared by every transcription thread, so it has to be
+    # safe to call from all of them at once.
+    import threading
+    hits, lock = [], threading.Lock()
+    shared = rubric_module._RateLimiter(interval=5.0)
+
+    def hammer():
+        if shared.ready("one-job"):
+            with lock:
+                hits.append(1)
+
+    threads = [threading.Thread(target=hammer) for _ in range(50)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    check(f"50 threads racing produce exactly one write ({len(hits)})", len(hits) == 1)
+
+
 def main():
     test_every_extraction_path_returns_the_same_shape()
+    test_a_healthy_job_is_not_declared_dead_under_load()
     test_anchors_are_chosen_before_they_are_read()
     test_pool_threads_have_an_application_context()
     test_one_bad_submission_does_not_take_the_roster()
