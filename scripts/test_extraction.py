@@ -589,6 +589,75 @@ def test_vision_gateway_shape():
         _restore()
 
 
+def test_pdfium_is_not_used_from_two_threads_at_once():
+    """Rasterising from several threads corrupted PDFium's own object tree.
+
+    Submissions are graded three at a time, so several scanned PDFs being
+    rendered at the same moment is ordinary, not exotic. It produced "Some
+    kids weakrefs have not been cleaned up" and an AssertionError from inside
+    pypdfium2, and at worst "double free or corruption" -- which kills the
+    interpreter and takes the whole grading run with it, not just one row.
+    """
+    import threading
+
+    print("\n-- several scanned submissions can be rendered at once --")
+    ocr, ex, _patch = _with_backend("vision", TRANSCRIPT)
+    try:
+        from unittest import mock
+
+        check("rendering is serialised by a process-wide lock",
+              isinstance(getattr(ex, "_PDF_RENDER_LOCK", None), type(threading.Lock())))
+
+        pdf = _scanned_pdf(3)
+        failures, done = [], []
+
+        def render_many():
+            try:
+                for _ in range(8):
+                    done.append(len(ex._render_pdf_pages(pdf)))
+            except Exception as exc:  # noqa: BLE001 -- the point of the test
+                failures.append(repr(exc)[:120])
+
+        threads = [threading.Thread(target=render_many) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        check(f"32 concurrent rasterisations all succeed ({len(done)})", len(done) == 32)
+        check("none of them raised", not failures)
+        if failures:
+            print("      " + failures[0])
+        check("every one produced the whole PDF", set(done) == {3})
+
+        # And the whole extraction path, which also runs pdfplumber.
+        failures.clear()
+        # Patched once, before any thread starts: mock.patch is not
+        # thread-local, so patching inside each worker has them unpatching
+        # each other and is a race in the test rather than in the code.
+        original_reader = ocr._read_page_vision
+        ocr._read_page_vision = (
+            lambda image, index, context, **kwargs: ocr.PageText(index, TRANSCRIPT))
+
+        def extract_many():
+            try:
+                for _ in range(6):
+                    ex.extract_document("scan.pdf", pdf, "Midterm")
+            except Exception as exc:  # noqa: BLE001
+                failures.append(repr(exc)[:120])
+
+        threads = [threading.Thread(target=extract_many) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        ocr._read_page_vision = original_reader
+        check("the full extraction path survives the same concurrency", not failures)
+        if failures:
+            print("      " + failures[0])
+    finally:
+        _restore()
+
+
 def test_an_empty_reply_is_retried_not_fatal():
     """The failure that cost a real submission: "the model returned nothing".
 
@@ -1125,6 +1194,7 @@ def main():
     test_handwriting_off_by_default()
     test_handwriting_transcription()
     test_vision_gateway_shape()
+    test_pdfium_is_not_used_from_two_threads_at_once()
     test_an_empty_reply_is_retried_not_fatal()
     test_runaway_generation_is_bounded_and_detected()
     test_pages_are_transcribed_in_parallel()

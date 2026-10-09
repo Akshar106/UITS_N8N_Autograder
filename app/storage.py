@@ -1,3 +1,4 @@
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 
@@ -93,6 +94,10 @@ ADDED_COLUMNS = {
         "extraction_notes": "TEXT",
         "ai_disagreement": "REAL",
     },
+    # A run token, so a job that has been superseded can tell. Without it a
+    # restart left the first grading thread running alongside the second,
+    # both writing the same rows and both counting progress -- 68 of 40.
+    "grading_jobs": {"run_id": "TEXT"},
 }
 
 
@@ -386,27 +391,48 @@ def mark_reviews_stale(iu_user_id, course_id, assignment_id):
 # --- grading jobs (background grading progress) -------------------------------
 
 def start_grading_job(iu_user_id, course_id, assignment_id, total):
+    """Begin a run and return its token. The token is how a run knows it is
+    still the current one: a restart stores a new token, and the thread from
+    the previous run then stops instead of grading the same roster a second
+    time alongside its replacement."""
+    run_id = secrets.token_hex(8)
     db = get_db()
     db.execute(
         """
-        INSERT INTO grading_jobs (iu_user_id, course_id, assignment_id, status, total, done, message, updated_at)
-        VALUES (?, ?, ?, 'running', ?, 0, NULL, ?)
+        INSERT INTO grading_jobs (iu_user_id, course_id, assignment_id, status, total, done, message, updated_at, run_id)
+        VALUES (?, ?, ?, 'running', ?, 0, NULL, ?, ?)
         ON CONFLICT(iu_user_id, course_id, assignment_id) DO UPDATE SET
-            status = 'running', total = excluded.total, done = 0, message = NULL, updated_at = excluded.updated_at
+            status = 'running', total = excluded.total, done = 0, message = NULL,
+            updated_at = excluded.updated_at, run_id = excluded.run_id
         """,
-        (iu_user_id, course_id, assignment_id, total, _now()),
+        (iu_user_id, course_id, assignment_id, total, _now(), run_id),
     )
     db.commit()
+    return run_id
 
 
-def increment_grading_progress(iu_user_id, course_id, assignment_id):
+def run_is_current(iu_user_id, course_id, assignment_id, run_id):
+    """False once another run has taken over, so a superseded thread can stop."""
+    if run_id is None:
+        return True
+    job = get_grading_job(iu_user_id, course_id, assignment_id)
+    return bool(job) and job.get("run_id") == run_id
+
+
+def increment_grading_progress(iu_user_id, course_id, assignment_id, run_id=None):
+    """Count one finished submission, unless this run has been superseded.
+
+    A superseded run must not touch the counter: its increments would be
+    added to the new run's total and the progress shown would be nonsense.
+    """
     db = get_db()
     db.execute(
         """
         UPDATE grading_jobs SET done = done + 1, updated_at = ?
         WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ?
+          AND (? IS NULL OR run_id = ?)
         """,
-        (_now(), iu_user_id, course_id, assignment_id),
+        (_now(), iu_user_id, course_id, assignment_id, run_id, run_id),
     )
     db.commit()
 
@@ -443,7 +469,7 @@ def save_cached_page(cache_key, text):
     db.commit()
 
 
-def touch_grading_job(iu_user_id, course_id, assignment_id, message=None):
+def touch_grading_job(iu_user_id, course_id, assignment_id, message=None, run_id=None):
     """Say the job is still alive without claiming progress.
 
     Progress is counted per submission, but one submission can take many
@@ -456,28 +482,33 @@ def touch_grading_job(iu_user_id, course_id, assignment_id, message=None):
             """
             UPDATE grading_jobs SET updated_at = ?
             WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ? AND status = 'running'
+              AND (? IS NULL OR run_id = ?)
             """,
-            (_now(), iu_user_id, course_id, assignment_id),
+            (_now(), iu_user_id, course_id, assignment_id, run_id, run_id),
         )
     else:
         db.execute(
             """
             UPDATE grading_jobs SET updated_at = ?, message = ?
             WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ? AND status = 'running'
+              AND (? IS NULL OR run_id = ?)
             """,
-            (_now(), message, iu_user_id, course_id, assignment_id),
+            (_now(), message, iu_user_id, course_id, assignment_id, run_id, run_id),
         )
     db.commit()
 
 
-def finish_grading_job(iu_user_id, course_id, assignment_id, status, message=None):
+def finish_grading_job(iu_user_id, course_id, assignment_id, status, message=None, run_id=None):
+    """Mark the run finished -- unless it was superseded, in which case the
+    run that replaced it is still working and must not be marked done."""
     db = get_db()
     db.execute(
         """
         UPDATE grading_jobs SET status = ?, message = ?, updated_at = ?
         WHERE iu_user_id = ? AND course_id = ? AND assignment_id = ?
+          AND (? IS NULL OR run_id = ?)
         """,
-        (status, message, _now(), iu_user_id, course_id, assignment_id),
+        (status, message, _now(), iu_user_id, course_id, assignment_id, run_id, run_id),
     )
     db.commit()
 

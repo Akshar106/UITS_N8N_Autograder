@@ -16,6 +16,7 @@ import json
 import os
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 
 import pdfplumber
@@ -25,6 +26,9 @@ from docx import Document
 from app import ocr
 
 logger = logging.getLogger(__name__)
+
+# Serialises every use of PDFium. See _render_pdf_pages.
+_PDF_RENDER_LOCK = threading.Lock()
 
 # WordprocessingML namespaces. The 'm' one is the equation editor: Big-O written
 # with it lives in <m:t> elements that a plain <w:t> sweep never sees.
@@ -416,6 +420,23 @@ def _render_pdf_pages(content_bytes):
             "This PDF has no readable text and would need to be transcribed from "
             "page images, but the PDF renderer is not installed."
         ) from exc
+
+    # One rasterisation at a time, across the whole process. PDFium keeps a
+    # tree of parent/child handles and closing them from several threads at
+    # once corrupts it: under a roster's concurrency this raised "Some kids
+    # weakrefs have not been cleaned up" and an AssertionError from inside
+    # pypdfium2, and at worst "double free or corruption", which kills the
+    # interpreter and takes the entire grading run with it.
+    #
+    # The cost is small and the trade is one-sided: rasterising a page is
+    # tens of milliseconds against gateway calls measured in seconds, so the
+    # queue here is invisible next to the transcription it feeds.
+    with _PDF_RENDER_LOCK:
+        return _render_pdf_pages_locked(content_bytes)
+
+
+def _render_pdf_pages_locked(content_bytes):
+    import pypdfium2
 
     images = []
     document = pypdfium2.PdfDocument(io.BytesIO(content_bytes))

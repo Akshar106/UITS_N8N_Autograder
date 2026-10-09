@@ -141,14 +141,14 @@ def run_grading(course_id, assignment_id):
         if s.get("workflow_state") != "unsubmitted" and s.get("user_id") is not None
     ]
 
-    storage.start_grading_job(user_id, course_id, assignment_id, len(gradable))
+    run_id = storage.start_grading_job(user_id, course_id, assignment_id, len(gradable))
 
     app = current_app._get_current_object()
     # user_id is captured here and passed explicitly: the background thread has no
     # request context, so it cannot read the session to find out who owns this work.
     threading.Thread(
         target=_grade_submissions_job,
-        args=(app, user_id, course_id, assignment_id, rubric, gradable, token),
+        args=(app, user_id, course_id, assignment_id, rubric, gradable, token, run_id),
         daemon=True,
     ).start()
 
@@ -213,7 +213,7 @@ _PROGRESS_LIMITER = _RateLimiter()
 GRADING_CONCURRENCY = max(1, int(os.getenv("GRADING_CONCURRENCY", "3")))
 
 
-def _heartbeat(app, iu_user_id, course_id, assignment_id, stop):
+def _heartbeat(app, iu_user_id, course_id, assignment_id, stop, run_id=None):
     """Touch the job while it works, so slow work is not mistaken for a crash.
 
     Its own thread deliberately: the work it is vouching for spends minutes
@@ -223,12 +223,13 @@ def _heartbeat(app, iu_user_id, course_id, assignment_id, stop):
     with app.app_context():
         while not stop.wait(HEARTBEAT_SECONDS):
             try:
-                storage.touch_grading_job(iu_user_id, course_id, assignment_id)
+                storage.touch_grading_job(iu_user_id, course_id, assignment_id, run_id=run_id)
             except Exception as exc:  # noqa: BLE001 -- never kill the run over a heartbeat
                 current_app.logger.warning("Grading heartbeat failed: %s", exc)
 
 
-def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, submissions, access_token):
+def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, submissions,
+                           access_token, run_id=None):
     """Runs in a background thread so a large roster can't block/timeout the request.
 
     Each graded submission is written as soon as it's ready, so the review
@@ -241,7 +242,7 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
     stop_heartbeat = threading.Event()
     threading.Thread(
         target=_heartbeat,
-        args=(app, iu_user_id, course_id, assignment_id, stop_heartbeat),
+        args=(app, iu_user_id, course_id, assignment_id, stop_heartbeat, run_id),
         daemon=True,
     ).start()
 
@@ -282,11 +283,20 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                 # g, which does not exist in one. Forgetting this is what broke
                 # transcription in production.
                 with app.app_context():
+                    # Another run has taken this assignment over, so stop. A
+                    # job wrongly reported dead gets restarted by hand, and
+                    # without this the first thread kept grading the same
+                    # roster beside its replacement: twice the load on the
+                    # gateway, both writing the same rows, and a progress
+                    # count that reached 68 of 40.
+                    if not storage.run_is_current(iu_user_id, course_id,
+                                                  assignment_id, run_id):
+                        return
                     try:
                         _grade_submission_row(
                             app, iu_user_id, course_id, assignment_id, rubric,
                             submission, anchors, expected_criteria, expected_total,
-                            page_cache,
+                            page_cache, run_id=run_id,
                         )
                     except Exception as exc:  # noqa: BLE001
                         # One bad submission must not take the roster with it.
@@ -302,7 +312,7 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                         )
                     finally:
                         storage.increment_grading_progress(
-                            iu_user_id, course_id, assignment_id)
+                            iu_user_id, course_id, assignment_id, run_id=run_id)
 
             if workers == 1:
                 for submission in submissions:
@@ -311,7 +321,8 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
                 with ThreadPoolExecutor(max_workers=workers) as pool:
                     list(pool.map(grade_one, submissions))
 
-            storage.finish_grading_job(iu_user_id, course_id, assignment_id, "done")
+            storage.finish_grading_job(iu_user_id, course_id, assignment_id, "done",
+                                       run_id=run_id)
         except Exception as exc:  # noqa: BLE001 -- last-resort guard so the job never hangs at "running" forever
             storage.finish_grading_job(iu_user_id, course_id, assignment_id, "error", str(exc))
         finally:
@@ -319,7 +330,8 @@ def _grade_submissions_job(app, iu_user_id, course_id, assignment_id, rubric, su
 
 
 def _grade_submission_row(app, iu_user_id, course_id, assignment_id, rubric, submission,
-                          anchors, expected_criteria, expected_total, page_cache):
+                          anchors, expected_criteria, expected_total, page_cache,
+                          run_id=None):
     """Extract, grade and store one submission. Runs on a pool thread."""
     user = submission.get("user") or {}
     # The student identity always comes from Canvas, never from the LLM's
@@ -349,7 +361,7 @@ def _grade_submission_row(app, iu_user_id, course_id, assignment_id, rubric, sub
             return
         with app.app_context():
             storage.touch_grading_job(
-                iu_user_id, course_id, assignment_id,
+                iu_user_id, course_id, assignment_id, run_id=run_id,
                 message=f"Reading {student_name}'s submission: page {done} of {total}")
 
     student_text, submission_filename, extraction_error, extraction_notes, from_ocr = \

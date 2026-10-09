@@ -571,8 +571,222 @@ def test_a_healthy_job_is_not_declared_dead_under_load():
     check(f"50 threads racing produce exactly one write ({len(hits)})", len(hits) == 1)
 
 
+def test_a_restarted_job_does_not_run_twice():
+    """Pressing grade again must replace the run, not add a second one.
+
+    A job wrongly reported dead gets restarted by hand -- which is exactly
+    what the stale-detection bug made people do. The first thread kept going:
+    two graders on one roster, twice the load on the gateway, both writing
+    the same rows, and a progress count that reached 68 of 40. Nothing told
+    the first thread it had been replaced, because nothing could.
+    """
+    from app import storage
+
+    print("\n-- a restart replaces the run instead of doubling it --")
+    app = make_app()
+    with app.app_context():
+        first = storage.start_grading_job(OWNER, COURSE, ASSIGNMENT, 40)
+        check("starting a run hands back a token", bool(first))
+        for _ in range(12):
+            storage.increment_grading_progress(OWNER, COURSE, ASSIGNMENT, run_id=first)
+        check("the first run counts its work",
+              storage.get_grading_job(OWNER, COURSE, ASSIGNMENT)["done"] == 12)
+
+        second = storage.start_grading_job(OWNER, COURSE, ASSIGNMENT, 40)
+        check("the new run gets a different token", second != first)
+        check("the first run can tell it is no longer current",
+              not storage.run_is_current(OWNER, COURSE, ASSIGNMENT, first))
+        check("the new run is current",
+              storage.run_is_current(OWNER, COURSE, ASSIGNMENT, second))
+
+        # The superseded thread keeps going until it next looks. Everything
+        # it writes from here must be ignored.
+        for _ in range(28):
+            storage.increment_grading_progress(OWNER, COURSE, ASSIGNMENT, run_id=first)
+        storage.touch_grading_job(OWNER, COURSE, ASSIGNMENT,
+                                  message="from the old thread", run_id=first)
+        storage.finish_grading_job(OWNER, COURSE, ASSIGNMENT, "done", run_id=first)
+        job = storage.get_grading_job(OWNER, COURSE, ASSIGNMENT)
+        check(f"the old run cannot inflate the counter (done={job['done']})",
+              job["done"] == 0)
+        check("the old run cannot mark the job finished", job["status"] == "running")
+        check("the old run cannot overwrite the message",
+              job["message"] != "from the old thread")
+
+        for _ in range(40):
+            storage.increment_grading_progress(OWNER, COURSE, ASSIGNMENT, run_id=second)
+        storage.finish_grading_job(OWNER, COURSE, ASSIGNMENT, "done", run_id=second)
+        job = storage.get_grading_job(OWNER, COURSE, ASSIGNMENT)
+        check(f"the live run finishes exactly ({job['done']}/{job['total']})",
+              job["done"] == job["total"] == 40)
+        check("and marks the job done", job["status"] == "done")
+
+
+def test_a_superseded_worker_stops_grading():
+    """The whole point of the token: the replaced thread must stop working."""
+    from app import storage
+    from app.routes import rubric as rubric_module
+
+    print("\n-- the replaced thread stops instead of grading on --")
+    app = make_app()
+    submissions = fake_submissions(8)
+    rubric_module.GRADING_CONCURRENCY = 1
+
+    graded = []
+
+    def extract(submission, access_token, assignment_name="", progress=None,
+                cache=None, **kwargs):
+        graded.append(submission["user_id"])
+        # Someone restarts the job while this one is part way through.
+        if len(graded) == 3:
+            with app.app_context():
+                storage.start_grading_job(OWNER, COURSE, ASSIGNMENT, 8)
+        return ("answer", "a.pdf", None, [], False)
+
+    original = stub_edges(rubric_module, extract=extract)
+    try:
+        with app.app_context():
+            run_id = storage.start_grading_job(OWNER, COURSE, ASSIGNMENT, len(submissions))
+        rubric_module._grade_submissions_job(
+            app, OWNER, COURSE, ASSIGNMENT, RUBRIC, submissions, "token", run_id)
+    finally:
+        restore_edges(rubric_module, original)
+
+    check(f"it stopped rather than grading all eight ({len(graded)})",
+          len(graded) < len(submissions))
+    check("it stopped promptly after being replaced", len(graded) <= 4)
+
+
+def test_a_mixed_roster_grades_end_to_end():
+    """One assignment, every kind of submission, through the real pipeline.
+
+    Handwriting, a text PDF, Word, a notebook, a bare script, a photograph, a
+    plain text file, a submission with BOTH code and a scan, and a Canvas
+    text entry with no file at all -- which is what a real class of forty
+    actually hands in. Real extraction, real threads, real database; only
+    Canvas and the two models are stubbed.
+    """
+    import io
+    import json as jsonlib
+
+    from app import canvas_client, ocr, storage
+    from app.routes import rubric as rubric_module
+
+    print("\n-- a class of forty, every submission type at once --")
+
+    def docx_bytes():
+        from docx import Document
+        document = Document()
+        document.add_paragraph("Q1. Merge sort is O(n lg n): the tree has lg n levels.")
+        buffer = io.BytesIO()
+        document.save(buffer)
+        return buffer.getvalue()
+
+    def ipynb_bytes():
+        return jsonlib.dumps({"cells": [{"cell_type": "code",
+                                         "source": ["import pandas as pd\n", "df.head()"],
+                                         "outputs": [{"output_type": "stream",
+                                                      "text": ["ok"]}],
+                                         "metadata": {}, "execution_count": 1}],
+                              "metadata": {}, "nbformat": 4,
+                              "nbformat_minor": 5}).encode()
+
+    def text_pdf():
+        from reportlab.pdfgen import canvas as rl
+        buffer = io.BytesIO()
+        pdf = rl.Canvas(buffer)
+        pdf.drawString(72, 720, "Q1. T(n)=2T(n/2)+n solves to O(n lg n).")
+        pdf.showPage()
+        pdf.save()
+        return buffer.getvalue()
+
+    import importlib
+    import os as os_module
+
+    import app.extract
+    import app.ocr
+    os_module.environ["OCR_BACKEND"] = "vision"
+    importlib.reload(app.ocr)
+    importlib.reload(app.extract)
+    import test_extraction as te
+
+    kinds = [("handwritten.pdf", lambda: te._scanned_pdf(3)),
+             ("report.pdf", text_pdf),
+             ("essay.docx", docx_bytes),
+             ("hw.ipynb", ipynb_bytes),
+             ("solution.py", lambda: b"def f(n):\n    return n * n\n"),
+             ("photo.png", te._png),
+             ("notes.txt", lambda: b"Q1. O(n lg n).")]
+
+    submissions = []
+    for i in range(40):
+        if i % 11 == 7:
+            attachments = [{"filename": "problem1.py", "url": b"def g(x):\n    return x\n"},
+                           {"filename": "scan.pdf", "url": te._scanned_pdf(2)}]
+        elif i % 13 == 5:
+            attachments = []
+        else:
+            name, make = kinds[i % len(kinds)]
+            attachments = [{"filename": name, "url": make()}]
+        row = {"user_id": 5000 + i, "user": {"name": f"Student {i}"}, "attempt": 1,
+               "submitted_at": "2026-01-01T00:00:00Z", "attachments": attachments}
+        if not attachments:
+            row["body"] = "<p>Q1. The answer is O(n lg n).</p>"
+        submissions.append(row)
+
+    app_under_test = make_app()
+    rubric_module.GRADING_CONCURRENCY = 3
+    saved_reader = app.ocr._read_page_vision
+    saved_download = canvas_client.download_attachment
+    app.ocr._read_page_vision = (
+        lambda image, index, context, **kwargs: app.ocr.PageText(
+            index, f"handwritten answer page {index}"))
+    canvas_client.download_attachment = lambda url, token=None: url
+
+    original = stub_edges(rubric_module, grade=lambda *a, **k: {
+        "ok": True, "data": {"score_awarded": 8.0, "total_points": 10.0,
+                             "overall_feedback": "f", "per_question_breakdown": [],
+                             "confidence": "high"}})
+    # Keep the REAL extraction path; only Canvas and the models are stubbed.
+    rubric_module._extract_submission_text = original[0]
+    try:
+        run_job(app_under_test, rubric_module, submissions)
+    finally:
+        restore_edges(rubric_module, original)
+        app.ocr._read_page_vision = saved_reader
+        canvas_client.download_attachment = saved_download
+        os_module.environ.pop("OCR_BACKEND", None)
+        importlib.reload(app.ocr)
+        importlib.reload(app.extract)
+
+    with app_under_test.app_context():
+        rows = storage.list_submissions(OWNER, COURSE, ASSIGNMENT)
+        job = storage.get_grading_job(OWNER, COURSE, ASSIGNMENT)
+
+    graded = [r for r in rows if r["ai_score"] is not None]
+    errored = [r for r in rows if r["ai_error"]]
+    check(f"every student got a row ({len(rows)})", len(rows) == 40)
+    check(f"every submission was graded ({len(graded)})", len(graded) == 40)
+    check(f"none failed ({len(errored)})", not errored)
+    check(f"progress is exact ({job['done']}/{job['total']})",
+          job["done"] == job["total"] == 40)
+    check("the job finished", job["status"] == "done")
+
+    transcribed = [r for r in rows
+                   if "machine transcription" in (r["extraction_notes"] or "")]
+    check(f"the handwritten and photographed ones are marked ({len(transcribed)})",
+          len(transcribed) >= 10)
+    check("and every one of them is sent to a human",
+          all(r["ai_confidence"] == "low" for r in transcribed))
+    check("the typed ones are not forced to low confidence",
+          any(r["ai_confidence"] == "high" for r in rows))
+
+
 def main():
     test_every_extraction_path_returns_the_same_shape()
+    test_a_restarted_job_does_not_run_twice()
+    test_a_superseded_worker_stops_grading()
+    test_a_mixed_roster_grades_end_to_end()
     test_a_healthy_job_is_not_declared_dead_under_load()
     test_anchors_are_chosen_before_they_are_read()
     test_pool_threads_have_an_application_context()
