@@ -1,0 +1,975 @@
+#!/usr/bin/env python3
+"""Checks the guards that stand between a model's output and a student's grade.
+
+No network and no API key needed -- the model is stubbed, so this runs anywhere:
+
+    python3 scripts/test_grading_guards.py
+
+Covers the arithmetic the app no longer takes on trust, the rubric-coverage
+check that catches a silently skipped question, the retry behaviour on both
+malformed responses and transient API failures, and the request settings that
+make a re-run reproducible.
+"""
+import json
+import sys
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+FAILS = []
+
+
+def check(label, condition):
+    print(("PASS  " if condition else "FAIL  ") + label)
+    if not condition:
+        FAILS.append(label)
+
+
+def response(items, stated_score=None, stated_total=None, extras=None):
+    """A model response with the given per-question awards.
+
+    extras, when given, is a list of dicts merged into the matching breakdown
+    entry -- used to script evidence and confidence values.
+    """
+    breakdown = [
+        {"question": f"Q{i}", "max_points": mx, "awarded_points": aw, "comment": "c"}
+        for i, (aw, mx) in enumerate(items, start=1)
+    ]
+    for item, extra in zip(breakdown, extras or []):
+        item.update(extra)
+    return json.dumps({
+        "Assignment": "DSA",
+        "student_id": "1",
+        "total_points": stated_total if stated_total is not None else sum(m for _, m in items),
+        "score_awarded": stated_score if stated_score is not None else sum(a for a, _ in items),
+        "per_question_breakdown": breakdown,
+        "overall_feedback": "feedback",
+    })
+
+
+FIVE_CRITERIA = [{"description": f"Q{i}", "points": 10.0} for i in range(1, 6)]
+GOOD = [(10.0, 10.0), (7.0, 10.0), (4.0, 10.0), (0.0, 10.0), (10.0, 10.0)]
+
+
+def grade(raw_responses, student_text="answer", per_pass=None, **kwargs):
+    """Run grade_submission against a scripted sequence of model replies.
+
+    Single-pass unless the caller asks otherwise, so each guard is exercised on
+    one response rather than on a merge of two.
+
+    `per_pass` gives each concurrent pass its OWN reply script, and
+    `raw_responses` is then the tail used by anything sequential that follows,
+    such as the structural tie-breaker. One shared queue is enough only while
+    the replies are interchangeable: the passes run at the same time, so with
+    retries in play a flat list silently depends on which thread pops first,
+    and "three bad replies then a good one" could feed the good one to the
+    pass that was going to succeed anyway.
+    """
+    import threading
+
+    from app import grading
+
+    kwargs.setdefault("passes", 1)
+    tail = list(raw_responses)
+    queues = [list(q) for q in (per_pass or [])]
+    claimed = {}
+    lock = threading.Lock()
+
+    def reply(*_args):
+        # A thread claims the next script and keeps it until that script runs
+        # out, then claims another. Not one script per thread: a pool of two
+        # workers can still run both passes on the SAME thread when the first
+        # finishes before the second is scheduled, and keying on the thread
+        # made the test fail roughly half the time.
+        with lock:
+            thread = threading.current_thread().name
+            mine = claimed.get(thread)
+            if not mine:
+                if not queues:
+                    return tail.pop(0)
+                mine = claimed[thread] = queues.pop(0)
+            return mine.pop(0)
+
+    with mock.patch.object(grading, "call_reallm", side_effect=reply):
+        return grading.grade_submission("DSA", "rubric", "1", student_text, **kwargs)
+
+
+def test_ceiling():
+    """A score above the paper's total must be impossible, by two routes.
+
+    After recomputation the ceiling cannot actually be breached -- both totals
+    derive from the same per-question awards, each already capped at its own
+    maximum -- so the explicit assertion is defence in depth against a future
+    edit reordering those steps. It is therefore tested directly, and the
+    end-to-end path is tested for the behaviour that matters: a model claiming
+    an impossible score has that claim corrected rather than believed.
+    """
+    from app.grading import _validate_breakdown
+
+    print("\n-- a score can never exceed the paper --")
+
+    impossible = {"total_points": 50.0, "score_awarded": 60.0,
+                  "per_question_breakdown": [
+                      {"question": "Q1", "max_points": 50.0, "awarded_points": 60.0}]}
+    try:
+        _validate_breakdown(impossible)
+        check("the ceiling assertion fires", False)
+    except ValueError as exc:
+        check("the ceiling assertion fires", "out of a possible" in str(exc)
+              or "out of a maximum" in str(exc))
+
+    at_ceiling = {"total_points": 50.0, "score_awarded": 50.0,
+                  "per_question_breakdown": [
+                      {"question": "Q1", "max_points": 50.0, "awarded_points": 50.0}]}
+    _validate_breakdown(at_ceiling)
+    check("exactly full marks is allowed", True)
+
+    # End to end: a model claiming 60 out of 50 on a breakdown worth 10 has both
+    # numbers replaced by the breakdown's own arithmetic.
+    inflated_claim = json.dumps({
+        "Assignment": "DSA", "student_id": "1",
+        "total_points": 50.0, "score_awarded": 60.0,
+        "per_question_breakdown": [
+            {"question": "Q1", "max_points": 10.0, "awarded_points": 10.0, "comment": "c"}],
+        "overall_feedback": "f"})
+    data = grade([inflated_claim])["data"]
+    check("an inflated claim is corrected to the breakdown's arithmetic",
+          data["score_awarded"] == 10.0 and data["total_points"] == 10.0)
+
+    check("a legitimate full-marks answer is fine",
+          grade([response([(10.0, 10.0), (10.0, 10.0)])])["ok"])
+
+
+def test_adjudication():
+    print("\n-- two independent readings, compared --")
+
+    agree = response([(10.0, 10.0), (6.0, 10.0)], extras=[{"confidence": "high"}] * 2)
+    result = grade([agree, agree], passes=2)
+    data = result["data"]
+    check("two agreeing passes keep the agreed score", data["score_awarded"] == 16.0)
+    check("agreement reports no disagreement", data["max_disagreement"] == 0.0)
+    check("agreement keeps the confidence the passes reported", data["confidence"] == "high")
+    check("the number of passes is recorded", data["passes"] == 2)
+
+    first = response([(10.0, 10.0), (4.0, 10.0)],
+                     extras=[{"confidence": "high", "comment": "A"},
+                             {"confidence": "high", "comment": "harsh read"}])
+    second = response([(10.0, 10.0), (8.0, 10.0)],
+                      extras=[{"confidence": "high", "comment": "A"},
+                              {"confidence": "high", "comment": "generous read"}])
+    data = grade([first, second], passes=2)["data"]
+    q2 = data["per_question_breakdown"][1]
+    check("a disagreed question takes the midpoint", q2["awarded_points"] == 6.0)
+    check("the disagreement is recorded on the question", q2["disagreement"] == 4.0)
+    check("a disagreed question is forced to low confidence", q2["confidence"] == "low")
+    check("an agreed question keeps its own confidence",
+          data["per_question_breakdown"][0]["confidence"] == "high")
+    check("the row reports the worst disagreement", data["max_disagreement"] == 4.0)
+    check("the row is forced to low confidence", data["confidence"] == "low")
+    check("the totals are recomputed from the merged awards", data["score_awarded"] == 16.0)
+    check("the commentary comes from the pass nearest the merged award",
+          q2["comment"] in ("harsh read", "generous read"))
+
+    # Two passes almost always wobble a little. Flagging every wobble puts the
+    # whole class in the review queue, which is the same as flagging nobody, so
+    # a spread has to be big on BOTH scales that matter: large for the question
+    # it is on (small questions are graded more consistently, so a point there
+    # means more) and large enough to move the final grade.
+    minor = grade([response([(10.0, 10.0), (6.0, 10.0)], extras=[{"confidence": "high"}] * 2),
+                   response([(10.0, 10.0), (6.5, 10.0)], extras=[{"confidence": "high"}] * 2)],
+                  passes=2)["data"]
+    check("a spread too small to matter is still shown on the question",
+          minor["per_question_breakdown"][1]["disagreement"] == 0.5)
+    check("a spread too small to matter is not called material",
+          minor["per_question_breakdown"][1]["disagreement_material"] is False)
+    check("a spread too small to matter leaves the confidence alone",
+          minor["confidence"] == "high")
+    check("a spread too small to matter does not reach the review queue",
+          minor["max_disagreement"] == 0.0)
+    check("the raw spread is still reported for diagnosis",
+          minor["raw_disagreement"] == 0.5)
+
+    # Big for its five point question, but 1.5 points on a hundred point paper
+    # does not change what the student gets.
+    def paper_of_100(second_award):
+        return response([(second_award, 5.0), (60.0, 95.0)],
+                        extras=[{"confidence": "high"}] * 2)
+
+    data = grade([paper_of_100(5.0), paper_of_100(3.5)], passes=2)["data"]
+    check("a spread that cannot move the final grade is not material",
+          data["max_disagreement"] == 0.0 and data["raw_disagreement"] == 1.5)
+
+    data = grade([paper_of_100(5.0), paper_of_100(2.0)], passes=2)["data"]
+    check("a spread big on both scales is material",
+          data["max_disagreement"] == 3.0 and data["confidence"] == "low")
+
+    # A pass that fails validation must not drag the submission down with it.
+    bad = response([(99.0, 10.0)])
+    good = response([(10.0, 10.0), (6.0, 10.0)])
+    # Scripted per pass, not as one queue: the passes run concurrently, so a
+    # flat list would hand the good reply to whichever thread happened to be
+    # on its third retry first.
+    result = grade([], per_pass=[[bad, bad, bad], [good]], passes=2)
+    check("one failed pass falls back to the one that worked", result["ok"])
+    check("a single usable pass reports no disagreement",
+          result["data"]["max_disagreement"] == 0.0)
+
+    result = grade([bad] * 6, passes=2)
+    check("both passes failing is still an error", not result["ok"])
+
+    # Passes that disagree on the NUMBER of questions cannot be compared
+    # position by position. A rubric whose questions carry lettered sub-parts
+    # invites exactly this -- one reading grades the questions, another grades
+    # the sub-parts -- and keeping whichever arrived first is a coin toss over
+    # the whole grade, so a third reading breaks the tie.
+    three = response([(10.0, 10.0), (5.0, 10.0), (5.0, 10.0)])
+    two = response([(10.0, 10.0), (10.0, 10.0)])
+    two_harsher = response([(10.0, 10.0), (6.0, 10.0)])
+
+    data = grade([three, two, two_harsher], passes=2)["data"]
+    check("a split decision is broken by a third reading", data["structure_retried"] is True)
+    check("the tie-breaker sides with the majority structure",
+          len(data["per_question_breakdown"]) == 2)
+    check("the outvoted reading is dropped, not averaged in",
+          data["score_awarded"] == 18.0)
+    check("the surviving readings are still compared to each other",
+          data["structural_disagreement"] is False and data["raw_disagreement"] == 4.0)
+
+    # A tie-breaker that agrees with neither leaves the row to a human.
+    four = response([(10.0, 10.0)] * 4)
+    data = grade([three, two, four], passes=2)["data"]
+    check("an unbroken split is still flagged", data["structural_disagreement"] is True)
+    check("an unbroken split forces low confidence", data["confidence"] == "low")
+
+    check("passes that agree on structure take no extra reading",
+          grade([two, two_harsher], passes=2)["data"]["structure_retried"] is False)
+
+    check("a single pass still works and reports one pass",
+          grade([response(GOOD)], passes=1)["data"]["passes"] == 1)
+
+
+def test_quote_normalisation():
+    """Cases taken from a real handwritten submission's flagged quotes."""
+    from app.grading import _normalise
+
+    print("\n-- what counts as the same words --")
+
+    def contains(quote, source):
+        return _normalise(quote) in _normalise(source)
+
+    # Cosmetic: the reader dropped an underscore the page has.
+    check("n_max and nmax are the same words",
+          contains("nmax = 7, rounded = 7.966", "[box: n_max = 7], rounded = 7.966"))
+    check("an identifier with underscores still matches itself",
+          contains("modified_insertion_sort(A, n)", "def modified_insertion_sort(A, n):"))
+    check("punctuation and case still fold",
+          contains("THE RUNNING TIME IS O(N^2)", "the running time is O(n^2)."))
+
+    # The tool's own annotations sit between the student's lines, so a quote
+    # running across them cannot match contiguously even though every word of
+    # it is the student's. Observed on a real submission: a pseudocode quote
+    # was flagged because a [diagram: ...] note had been inserted mid-block.
+    transcript = ("--- page 1 (machine transcription) ---\n"
+                  "if A[j] > max then           n^2\n"
+                  "  max <- A[j] ; [diagram: a curly brace joining two lines]\n"
+                  "  index <- j ;\n")
+    # _quote_is_in, not contains: marker stripping is one of the alternative
+    # haystacks the real check tries, which plain normalisation does not.
+    from app.grading import _quote_is_in
+
+    check("a quote spanning one of our own markers is not called missing",
+          _quote_is_in("max <- A[j] ; index <- j ;", transcript)[0])
+    check("a quote spanning a page header is not called missing",
+          _quote_is_in("if A[j] > max then", transcript)[0])
+    check("stripping markers does not let an absent quote through",
+          not _quote_is_in("max <- A[j] ; return B ;", transcript)[0])
+
+    # Not cosmetic: the model added a word the student did not write.
+    check("a word inserted into the quote is still caught",
+          not contains("if moved = True then A[j+1] <- Key",
+                       "if moved = True\n    A[j+1] <- Key"))
+    check("a quote of something absent is still caught",
+          not contains("the algorithm is O(n log n)", "the running time is O(n^2)"))
+
+
+def test_all_or_nothing_rubric():
+    print("\n-- an all-or-nothing Canvas rubric admits no midpoints --")
+
+    binary = [{"description": "Step 1", "points": 2.0, "binary": True},
+              {"description": "Step 2", "points": 2.0, "binary": True}]
+
+    # Two passes splitting on a Full Marks / No Marks step average to half
+    # marks, which is the one answer that rubric says cannot happen.
+    split = grade([response([(2.0, 2.0), (2.0, 2.0)]),
+                   response([(2.0, 2.0), (0.0, 2.0)])],
+                  passes=2, expected_criteria=binary, expected_total=4.0)["data"]
+    awards = [q["awarded_points"] for q in split["per_question_breakdown"]]
+    check("a split on an all-or-nothing step does not become half marks",
+          awards == [2.0, 0.0])
+    check("a tie goes to the lower value rather than inflating the grade",
+          split["score_awarded"] == 2.0)
+    check("the snap is recorded so a human can see it happened",
+          split["snapped_awards"] == 1
+          and split["per_question_breakdown"][1]["snapped_from"] == 1.0)
+    check("the disagreement is still reported after snapping",
+          split["raw_disagreement"] == 2.0 and split["confidence"] == "low")
+
+    # A single pass that ignores the scale is corrected the same way.
+    single = grade([response([(1.5, 2.0), (0.4, 2.0)])],
+                   passes=1, expected_criteria=binary, expected_total=4.0)["data"]
+    check("partial credit on an all-or-nothing step is snapped to the scale",
+          [q["awarded_points"] for q in single["per_question_breakdown"]] == [2.0, 0.0])
+    check("the total is recomputed from the snapped awards",
+          single["score_awarded"] == 2.0)
+
+    # A graded scale is a real judgment and must be left alone.
+    scaled = [{"description": "Q1", "points": 2.0, "binary": False},
+              {"description": "Q2", "points": 2.0, "binary": False}]
+    data = grade([response([(1.5, 2.0), (0.5, 2.0)])],
+                 passes=1, expected_criteria=scaled, expected_total=4.0)["data"]
+    check("partial credit on a graded scale is untouched",
+          [q["awarded_points"] for q in data["per_question_breakdown"]] == [1.5, 0.5])
+    check("an untouched grade records no snap", "snapped_awards" not in data)
+
+
+STUDENT_ANSWER = (
+    "Q1: A binary search tree keeps all values in the left subtree smaller than "
+    "the node. Average-case search is O(log n) when the tree is balanced.\n\n"
+    "Q2: The naive recursive version is O(2^n) because it recomputes subproblems."
+)
+
+
+def test_evidence_verification():
+    print("\n-- an award has to be backed by the student's own words --")
+
+    verbatim = grade(
+        [response([(10.0, 10.0)], extras=[{"evidence": "Average-case search is O(log n)"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    item = verbatim["data"]["per_question_breakdown"][0]
+    check("a verbatim quote is verified", item["evidence_verified"] is True)
+
+    # The prompt asks for " ... " between fragments of a shortened quote.
+    elided = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "A binary search tree keeps ... smaller than the node"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("an elided quote is verified when every fragment is present in order",
+          elided["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    # Order is deliberately not required: models group fragments the rubric's way
+    # (definition, average case, worst case) while the student may have written
+    # them in any order. Rejecting that flagged quotes whose every word was the
+    # student's -- seen twice in a real eval run.
+    out_of_order = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "smaller than the node ... A binary search tree keeps"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("fragments quoted out of the student's order still verify",
+          out_of_order["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    # A parenthetical aside skipped mid-quote is still the student's words.
+    aside = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "probing like linear probing, quadratic probing, or double hashing"}])],
+        student_text="Q5: probing like linear probing (check the next slot), quadratic "
+                     "probing, or double hashing (a second hash sets the step).",
+    )
+    check("a skipped parenthetical still verifies",
+          aside["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    paraphrase = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "The student demonstrated a clear grasp of collision resolution"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("a plausible paraphrase is still flagged as not the student's words",
+          paraphrase["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
+
+    fabricated = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "The student clearly explained the degenerate tree case"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    fab_item = fabricated["data"]["per_question_breakdown"][0]
+    check("an invented quote is flagged", fab_item["evidence_verified"] is False)
+    check("an invented quote does not fail the submission", fabricated["ok"])
+    check("an invented quote forces the row to low confidence",
+          fabricated["data"]["confidence"] == "low")
+
+    # The two false positives seen in a real eval run: a model quoting with a
+    # typographic apostrophe, and one that dropped a pair of parentheses. Both
+    # were genuinely present in the submission, and flagging them as fabricated
+    # is worse than not checking at all -- it teaches faculty to ignore the flag.
+    curly = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "A binary search tree keeps all values in the left subtree "
+                        "smaller than the node\u2019s position"}])],
+        student_text="Q1: A binary search tree keeps all values in the left subtree "
+                     "smaller than the node's position.",
+    )
+    check("a typographic apostrophe still verifies",
+          curly["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    parens = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "storing a linked list or similar bucket"}])],
+        student_text="Q5: ... storing a linked list (or similar bucket) of all entries.",
+    )
+    check("dropped parentheses still verify",
+          parens["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    half = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "A binary search tree keeps ... and the student proved the bound"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("a half-real, half-invented quote is still flagged",
+          half["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
+
+    # Code quotes are inherently several lines, and the lines a model picks are
+    # rarely adjacent in the source -- it skips imports and blank lines. Eight of
+    # these were wrongly flagged in one real run.
+    CODE = ("import pandas as pd\n"
+            "from sklearn.pipeline import Pipeline\n\n"
+            "df = pd.read_csv('churn.csv')\n"
+            "prep = ColumnTransformer([('num', StandardScaler(), num)])\n"
+            "X_train, X_test = train_test_split(X, y, stratify=y)\n")
+    multiline = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "prep = ColumnTransformer([('num', StandardScaler(), num)])\n"
+                        "X_train, X_test = train_test_split(X, y, stratify=y)"}])],
+        student_text=CODE,
+    )
+    check("non-adjacent code lines quoted together still verify",
+          multiline["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    # Some models write a literal backslash-n inside the JSON string instead of a
+    # real newline; the backslash is stripped as punctuation and the "n" fuses
+    # onto the next word.
+    escaped = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "df = pd.read_csv('churn.csv')\\nprep = ColumnTransformer("}])],
+        student_text=CODE,
+    )
+    check("a literal backslash-n between lines still verifies",
+          escaped["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    invented_line = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "df = pd.read_csv('churn.csv')\nmodel.explain_shap_values()"}])],
+        student_text=CODE,
+    )
+    check("an invented line among real ones is still flagged",
+          invented_line["data"]["per_question_breakdown"][0]["evidence_verified"] is False)
+
+    messy = grade(
+        [response([(10.0, 10.0)], extras=[{
+            "evidence": "AVERAGE-CASE   search\nis O(log n)"}])],
+        student_text=STUDENT_ANSWER,
+    )
+    check("case and whitespace differences still verify",
+          messy["data"]["per_question_breakdown"][0]["evidence_verified"] is True)
+
+    none_given = grade([response([(0.0, 10.0)])], student_text=STUDENT_ANSWER)
+    blank = none_given["data"]["per_question_breakdown"][0]
+    check("no quote offered is neither verified nor flagged", blank["evidence_verified"] is None)
+    check("a missing evidence field defaults to empty", blank["evidence"] == "")
+    check("a missing 'missing' field defaults to empty", blank["missing"] == "")
+
+
+def test_confidence():
+    print("\n-- confidence is normalised and rolls up to the row --")
+
+    result = grade([response(
+        [(10.0, 10.0), (5.0, 10.0), (0.0, 10.0)],
+        extras=[{"confidence": "high"}, {"confidence": "LOW"}, {"confidence": "medium"}],
+    )], student_text=STUDENT_ANSWER)
+    levels = [q["confidence"] for q in result["data"]["per_question_breakdown"]]
+    check("valid confidence values are kept", levels == ["high", "low", "medium"])
+    check("confidence is case-insensitive", levels[1] == "low")
+    check("the row takes the weakest question's confidence",
+          result["data"]["confidence"] == "low")
+
+    result = grade([response([(10.0, 10.0)], extras=[{"confidence": "extremely sure"}])])
+    check("a nonsense confidence value falls back to medium",
+          result["data"]["per_question_breakdown"][0]["confidence"] == "medium")
+
+    result = grade([response([(10.0, 10.0)])])
+    check("a missing confidence field falls back to medium",
+          result["data"]["confidence"] == "medium")
+
+    result = grade([response(
+        [(10.0, 10.0), (10.0, 10.0)],
+        extras=[{"confidence": "high"}, {"confidence": "high"}],
+    )])
+    check("all-high questions give a high-confidence row",
+          result["data"]["confidence"] == "high")
+
+
+def test_basis():
+    print("\n-- what each judgment was graded against --")
+
+    result = grade([response(
+        [(10.0, 10.0), (5.0, 10.0), (8.0, 10.0)],
+        extras=[{"basis": "rubric"}, {"basis": "KNOWLEDGE"}, {"basis": "both"}],
+    )])
+    bases = [q["basis"] for q in result["data"]["per_question_breakdown"]]
+    check("valid basis values are kept", bases == ["rubric", "knowledge", "both"])
+    check("basis is case-insensitive", bases[1] == "knowledge")
+    check("knowledge and both are counted for the row",
+          result["data"]["knowledge_judgments"] == 2)
+
+    result = grade([response([(10.0, 10.0)], extras=[{"basis": "vibes"}])])
+    check("a nonsense basis falls back to rubric",
+          result["data"]["per_question_breakdown"][0]["basis"] == "rubric")
+
+    result = grade([response([(10.0, 10.0)])])
+    check("a missing basis defaults to rubric -- the conservative reading",
+          result["data"]["per_question_breakdown"][0]["basis"] == "rubric")
+    check("a rubric-only row counts no knowledge judgments",
+          result["data"]["knowledge_judgments"] == 0)
+
+
+def test_anchor_examples():
+    print("\n-- calibration against the instructor's own grading --")
+    from app import grading
+
+    reviewed = [
+        {"score": 12.0, "feedback": "weak", "text": "bad answer"},
+        {"score": 25.0, "feedback": "", "text": "middling answer"},
+        {"score": 31.0, "feedback": "", "text": "ok answer"},
+        {"score": 47.0, "feedback": "strong", "text": "great answer"},
+    ]
+    picked = grading.select_anchor_examples(reviewed, limit=3)
+    check("three anchors are chosen", len(picked) == 3)
+    check("the anchors span the score range",
+          picked[0]["score"] == 12.0 and picked[-1]["score"] == 47.0)
+    check("the anchors are ordered by score",
+          [a["score"] for a in picked] == sorted(a["score"] for a in picked))
+
+    check("fewer reviewed than the limit returns them all",
+          len(grading.select_anchor_examples(reviewed[:2], limit=3)) == 2)
+    check("no reviewed submissions gives no anchors",
+          grading.select_anchor_examples([], limit=3) == [])
+    check("rows with no score are skipped",
+          grading.select_anchor_examples([{"score": None, "text": "x"}]) == [])
+    check("rows with no text are skipped",
+          grading.select_anchor_examples([{"score": 10.0, "text": "   "}]) == [])
+
+    # Selecting on the score alone is what lets the caller decide WHICH
+    # submissions to read before paying to read them. Reading fifty to keep
+    # three was most of a run's dead time, and on handwritten work it meant
+    # re-transcribing the whole approved set before the first new grade.
+    scores_only = [{"score": float(i), "student_id": str(i)} for i in range(50)]
+    cheap = grading.select_anchor_examples(scores_only, limit=3, require_text=False)
+    check("selection without text returns the limit", len(cheap) == 3)
+    check("selection without text still spans the range",
+          cheap[0]["score"] == 0.0 and cheap[-1]["score"] == 49.0)
+    check("selection without text keeps the identity the caller needs",
+          all("student_id" in row for row in cheap))
+    check("requiring text is still the default",
+          grading.select_anchor_examples([{"score": 10.0}]) == [])
+
+    rendered = grading.render_anchor_examples(picked, total_points=50)
+    check("the rendered block states the instructor's scores",
+          "awarded 12 / 50" in rendered and "awarded 47 / 50" in rendered)
+    check("the rendered block carries the graded text", "great answer" in rendered)
+    check("the instructor's comments are included", "strong" in rendered)
+    check("the block tells the model not to grade the examples",
+          "NOT grade these submissions" in rendered)
+
+    long_anchor = [{"score": 10.0, "feedback": "", "text": "x" * (grading.ANCHOR_TEXT_LIMIT + 500)}]
+    check("a very long example is truncated",
+          "[...truncated]" in grading.render_anchor_examples(long_anchor))
+    check("no anchors renders nothing", grading.render_anchor_examples([]) == "")
+
+    prompt = grading.build_user_prompt(
+        "DSA", "the rubric", "1", "the answer being graded",
+        anchors=picked, total_points=50,
+    )
+    check("anchors appear in the prompt", "INSTRUCTOR-GRADED EXAMPLES" in prompt)
+    check("the answer being graded comes last",
+          prompt.rindex("the answer being graded") > prompt.rindex("great answer"))
+    check("a prompt without anchors omits the section",
+          "INSTRUCTOR-GRADED" not in grading.build_user_prompt("DSA", "r", "1", "a"))
+
+
+def test_arithmetic():
+    print("\n-- the app does the arithmetic, not the model --")
+
+    result = grade([response(GOOD, stated_score=99.0, stated_total=12.0)])
+    check("a wrong stated score is replaced by the breakdown sum",
+          result["ok"] and result["data"]["score_awarded"] == 31.0)
+    check("a wrong stated total is replaced by the breakdown sum",
+          result["data"]["total_points"] == 50.0)
+
+    result = grade([response(GOOD)])
+    check("a correct response is left alone",
+          result["ok"] and result["data"]["score_awarded"] == 31.0)
+
+    # Quoted numbers are still coerced, as before.
+    raw = json.loads(response(GOOD))
+    raw["score_awarded"] = "31"
+    raw["per_question_breakdown"][0]["awarded_points"] = "10"
+    check("stringified numbers are still coerced",
+          grade([json.dumps(raw)])["ok"])
+
+    check("a fenced ```json block is still parsed",
+          grade(["```json\n" + response(GOOD) + "\n```"])["ok"])
+
+
+def test_impossible_scores():
+    print("\n-- impossible scores are rejected, not stored --")
+
+    over = [(12.0, 10.0)] + GOOD[1:]
+    result = grade([response(over)] * 3)
+    check("awarding more than the maximum is rejected", not result["ok"])
+    check("the error names the offending question", "awarded 12.0 out of a maximum of 10.0" in result["error"])
+
+    negative = [(-5.0, 10.0)] + GOOD[1:]
+    check("negative points are rejected", not grade([response(negative)] * 3)["ok"])
+
+    empty = json.dumps({
+        "Assignment": "DSA", "student_id": "1", "total_points": 50.0, "score_awarded": 0.0,
+        "per_question_breakdown": [], "overall_feedback": "f",
+    })
+    check("an empty breakdown is rejected", not grade([empty] * 3)["ok"])
+
+
+def test_rubric_coverage():
+    print("\n-- a skipped question is caught instead of quietly costing points --")
+
+    four_of_five = GOOD[:4]
+    result = grade([response(four_of_five)] * 3, expected_criteria=FIVE_CRITERIA)
+    check("dropping a rubric question is rejected", not result["ok"])
+    check("the error says how many were expected and graded",
+          "5 question(s)" in result["error"] and "graded 4" in result["error"])
+
+    check("grading all five is accepted",
+          grade([response(GOOD)], expected_criteria=FIVE_CRITERIA)["ok"])
+
+    wrong_max = [(10.0, 20.0)] + GOOD[1:]
+    result = grade([response(wrong_max)] * 3, expected_criteria=FIVE_CRITERIA)
+    check("grading a question out of the wrong maximum is rejected", not result["ok"])
+    check("the error names the criterion", "rubric allows 10.0 points" in result["error"])
+
+    result = grade([response(GOOD)] * 3, expected_total=100.0)
+    check("a total that disagrees with the rubric is rejected", not result["ok"])
+    check("the error names both totals",
+          "rubric totals 100.0" in result["error"] and "graded out of 50.0" in result["error"])
+
+    # The total check must run on the RECOMPUTED total, not the one the model
+    # stated. A real run produced a response claiming total_points 100 whose
+    # breakdown summed to 114; it passed the 100-point check and then had its
+    # total replaced by 114, and the submission scored 108 out of a 100-point
+    # paper.
+    inflated = [(18.0, 19.0)] * 6
+    result = grade([response(inflated, stated_total=100.0)] * 3, expected_total=100.0)
+    check("a breakdown that oversums the rubric total is rejected", not result["ok"])
+    check("the error names the real total, not the claimed one",
+          "graded out of 114.0" in result["error"])
+
+    undersized = [(4.0, 5.0)] * 6
+    result = grade([response(undersized, stated_total=100.0)] * 3, expected_total=100.0)
+    check("a breakdown that undersums the rubric total is rejected too", not result["ok"])
+
+    # Without a Canvas rubric there is nothing to check against, and grading
+    # must still work from an uploaded file alone.
+    check("no expected criteria means no coverage check", grade([response(GOOD[:3])])["ok"])
+
+
+def test_passes_run_concurrently():
+    """Two independent readings have no reason to wait for each other.
+
+    They ran one after another, which was the whole of a typed submission's
+    grading time: at a realistic 30s per call it made every such submission
+    take a minute instead of half of one, for no result anyone could see.
+    """
+    import threading
+    import time
+
+    from app import grading
+
+    print("\n-- the independent passes are taken at the same time --")
+
+    started, lock = [], threading.Lock()
+
+    def slow_pass(*_args, **_kwargs):
+        with lock:
+            started.append(time.time())
+        time.sleep(0.4)
+        return {"ok": True, "raw": "{}", "error": None, "data": {
+            "score_awarded": 8.0, "total_points": 10.0, "overall_feedback": "f",
+            "confidence": "high",
+            "per_question_breakdown": [{
+                "question_id": "Q1", "max_points": 10.0, "awarded_points": 8.0,
+                "basis": "rubric", "evidence_quote": "x", "comment": "ok",
+                "confidence": "high"}]}}
+
+    original = grading._grade_once
+    try:
+        grading._grade_once = slow_pass
+
+        began = time.time()
+        result = grading.grade_submission("A", "Q1 (10 points)", "1", "ans", passes=2)
+        elapsed = time.time() - began
+        gap = started[1] - started[0]
+
+        check(f"both passes were taken ({len(started)})", len(started) == 2)
+        check(f"the second did not wait for the first ({gap:.2f}s apart)", gap < 0.2)
+        check(f"two passes cost about one pass ({elapsed:.2f}s, not 0.80s)",
+              elapsed < 0.7)
+        check("the merged grade is still correct",
+              result["ok"] and result["data"]["score_awarded"] == 8.0)
+        check("the merge still knows how many passes it had",
+              result["data"].get("passes") == 2)
+
+        # A single pass must not pay for a thread pool it does not need.
+        started.clear()
+        single = grading.grade_submission("A", "Q1 (10 points)", "1", "ans", passes=1)
+        check("one pass still takes exactly one reading", len(started) == 1)
+        check("one pass still grades", single["ok"])
+    finally:
+        grading._grade_once = original
+
+
+def test_retries():
+    print("\n-- one bad response does not fail a real student --")
+
+    result = grade(["not json at all", response(GOOD)])
+    check("a malformed response is retried and then succeeds", result["ok"])
+
+    result = grade([response([(12.0, 10.0)]), response(GOOD)])
+    check("an invalid response is retried and then succeeds", result["ok"])
+
+    result = grade(["nope", "still nope", "nope again"])
+    check("three bad responses give up with an error", not result["ok"] and result["error"])
+    check("the raw text is kept for diagnosis", result["raw"] == "nope again")
+
+    result = grade([None, None, None])
+    check("no response at all is reported", not result["ok"] and "No response" in result["error"])
+
+    from app import grading
+    calls = []
+
+    def counting(*_args):
+        calls.append(1)
+        return response(GOOD)
+
+    with mock.patch.object(grading, "call_reallm", side_effect=counting):
+        grading.grade_submission("DSA", "r", "1", "a", passes=1)
+    check("a good response is not retried", len(calls) == 1)
+
+    calls.clear()
+    with mock.patch.object(grading, "call_reallm", side_effect=counting):
+        grading.grade_submission("DSA", "r", "1", "a", passes=2)
+    check("two passes cost exactly two calls when both succeed", len(calls) == 2)
+
+
+class FakeResponse:
+    def __init__(self, status_code, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+
+def ok_payload(content="hello"):
+    return {"choices": [{"message": {"content": content}}]}
+
+
+def test_llm_client():
+    print("\n-- the API client survives a flaky gateway --")
+    import requests
+
+    from app import llm_client
+
+    def run(responses):
+        seq = list(responses)
+
+        def post(*_a, **kwargs):
+            item = seq.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            post.payload = kwargs.get("json")
+            return item
+
+        with mock.patch.object(llm_client.requests, "post", side_effect=post), \
+             mock.patch.object(llm_client.time, "sleep"):
+            return llm_client.call_reallm("sys", "user"), post
+
+    result, _ = run([FakeResponse(429), FakeResponse(200, ok_payload())])
+    check("a 429 is retried and then succeeds", result == "hello")
+
+    result, _ = run([FakeResponse(503), FakeResponse(502), FakeResponse(200, ok_payload())])
+    check("repeated 5xx are retried up to the limit", result == "hello")
+
+    result, _ = run([requests.RequestException("boom"), FakeResponse(200, ok_payload())])
+    check("a network error is retried and then succeeds", result == "hello")
+
+    result, _ = run([FakeResponse(500), FakeResponse(500), FakeResponse(500)])
+    check("persistent failure gives up and returns None", result is None)
+
+    seq = [FakeResponse(400, text="bad request")]
+    calls = []
+
+    def post(*_a, **_k):
+        calls.append(1)
+        return seq.pop(0)
+
+    with mock.patch.object(llm_client.requests, "post", side_effect=post), \
+         mock.patch.object(llm_client.time, "sleep"):
+        result = llm_client.call_reallm("sys", "user")
+    check("a non-retryable 400 fails immediately", result is None and len(calls) == 1)
+
+    result, post = run([FakeResponse(200, {"choices": [{"message": {
+        "content": "", "reasoning_content": "fallback"}}]})])
+    check("reasoning_content is still used when content is empty", result == "fallback")
+
+    print("\n-- the same submission grades the same way twice --")
+    _, post = run([FakeResponse(200, ok_payload())])
+    check("temperature is zero", post.payload["temperature"] == 0)
+    check("no seed is sent unless configured", "seed" not in post.payload)
+
+    with mock.patch.object(llm_client, "SEED", "42"):
+        _, post = run([FakeResponse(200, ok_payload())])
+    check("a configured seed is sent", post.payload.get("seed") == 42)
+
+
+def test_prompt_guards():
+    print("\n-- the prompt states the fairness and coverage rules --")
+    from app import grading
+
+    # Normalised: the prompt is hard-wrapped, so a phrase under test can be
+    # split across a line break and still be present.
+    prompt = grading.SYSTEM_PROMPT
+    flat = " ".join(prompt.split())
+    check("the prompt tells the model to ignore grammar and spelling",
+          "IGNORE grammar, spelling" in prompt)
+    check("the prompt protects non-native English writers",
+          "second language" in prompt)
+    check("the prompt forbids rewarding length",
+          "SAME score" in prompt and "padded" in prompt)
+    check("the prompt demands one entry per rubric question",
+          "EXACTLY ONE breakdown entry" in prompt)
+    check("the prompt explains the transcription markers",
+          "[illegible]" in prompt and "[struck:" in prompt and "[?word]" in prompt)
+    check("the prompt survives an unmarked crossing-out",
+          "A CROSSING-OUT IS NOT ALWAYS MARKED" in prompt
+          and "outer inner loop" in prompt
+          and "do not mark them down for the doubling" in flat)
+    check("the prompt treats a guessed word charitably",
+          "correct under any plausible reading" in flat)
+    check("the prompt refuses to penalise transcription artefacts",
+          "DO NOT PENALISE THE TRANSCRIPTION" in prompt
+          and "resolve it in the student's favour" in flat)
+    check("the prompt will not judge a diagram it has not seen",
+          "you have not seen it" in flat)
+    check("the prompt says the cell labels are not the student's work",
+          "labels this tool added" in flat)
+    check("the prompt distinguishes code that ran from code that did not",
+          "NEVER RUN" in prompt and "not credit a RESULT that was never produced" in flat)
+    check("the prompt treats a crashed cell as the step not done",
+          "Code that crashes did not do the step" in flat)
+    check("the prompt credits a plot it cannot see without pretending to see it",
+          "do not claim to have seen" in flat and "do not withhold marks" in flat)
+    check("the prompt says sub-parts are not separate questions",
+          "6 entries, never 20" in flat)
+    check("the prompt demands a quote behind a zero",
+          "LOW OR ZERO SCORE STILL NEEDS ITS" in flat)
+    check("the prompt allows an empty quote only for an unattempted question",
+          "ONLY when the student wrote nothing at all" in flat)
+    check("the prompt keeps commentary out of the quote",
+          "NOTHING BUT the student's words" in flat)
+    check("the prompt says unanswered questions still get an entry",
+          "not attempted" in prompt)
+    check("the prompt says which rubric section is authoritative",
+          "SCORING RUBRIC section wins" in prompt)
+    check("the prompt demands verbatim quotes from the student",
+          "VERBATIM" in prompt and "evidence" in prompt)
+    check("the prompt asks for one short contiguous span, not a summary",
+          "QUOTE ONE SHORT CONTIGUOUS SPAN" in prompt
+          and "At most two fragments" in prompt
+          and "proves nothing and makes the award impossible to check" in flat)
+    check("the prompt forbids inventing joining words",
+          "do not add joining words" in flat)
+    check("the prompt forbids quoting the rubric or solutions as the student's words",
+          "any published solutions are NOT the student's" in flat)
+    check("the prompt forbids quoting text the student did not write",
+          "NEVER quote text that is not in the student's answer" in prompt)
+    check("the prompt separates what the rubric decides from what the model decides",
+          "The rubric is absolute about WHAT IS WORTH HOW MUCH" in flat)
+    check("the prompt allows differently-worded correct answers",
+          "same idea in different words" in flat)
+    check("the prompt accepts other valid examples after 'such as'",
+          "such as" in flat and "same kind earns the same credit" in flat)
+    check("the prompt forbids changing the marks on a question",
+          "Never change the number of questions or the marks on any of them" in flat)
+    check("the prompt ties every basis back to the evidence quote",
+          "Every award still has to be supported by a quote from the student, whichever basis"
+          in flat)
+    print("\n-- the prompt covers rubric-silent questions, code and open analysis --")
+    check("the prompt says to use own knowledge where the rubric is silent",
+          "Where it is silent, grade the answer against the QUESTION using your own knowledge"
+          in flat)
+    check("the prompt forbids inventing a requirement then deducting for it",
+          "Never invent a requirement the rubric does not state and then deduct for it" in flat)
+    check("the prompt makes correctness implicitly required",
+          "Correctness is ALWAYS implicitly required" in flat)
+    check("the prompt states the award/deduct asymmetry",
+          "Use your knowledge freely to AWARD credit" in flat
+          and "Be far more careful using it to DEDUCT" in flat)
+    check("the prompt lists what may NOT be deducted for",
+          "less thorough than you would like" in flat and "could have been optimised further" in flat)
+    check("the prompt tells the grader to trace code logic",
+          "Trace the logic" in flat and "off-by-one" in flat)
+    check("the prompt ignores code style and unasked-for efficiency",
+          "Ignore naming, formatting, comments and language style" in flat
+          and "Ignore efficiency unless the question or rubric asks" in flat)
+    check("the prompt judges code separately from the prose beside it",
+          "Code that contradicts its own explanation" in flat)
+    check("the prompt grades open questions on reasoning, not conclusion",
+          "A well-argued position you disagree with earns full credit" in flat)
+    check("the prompt requires the basis to be declared",
+          '"basis" of exactly' in flat)
+    check("the prompt asks for an honest confidence level",
+          '"high", "medium" or "low"' in prompt and "not a failure" in prompt)
+
+
+def main():
+    test_arithmetic()
+    test_impossible_scores()
+    test_ceiling()
+    test_adjudication()
+    test_quote_normalisation()
+    test_all_or_nothing_rubric()
+    test_rubric_coverage()
+    test_passes_run_concurrently()
+    test_retries()
+    test_evidence_verification()
+    test_confidence()
+    test_basis()
+    test_anchor_examples()
+    test_llm_client()
+    test_prompt_guards()
+
+    print()
+    if FAILS:
+        print(f"{len(FAILS)} failure(s):")
+        for f in FAILS:
+            print(f"  - {f}")
+        return 1
+    print("ALL CHECKS PASSED")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

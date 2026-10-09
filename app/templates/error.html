@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Error - Autograder{% endblock %}
+{% block content %}
+  <div class="card">
+    <h1>Something went wrong</h1>
+    <div class="flash flash-error">{{ message }}</div>
+    <p>
+      <a class="btn" href="{{ url_for('auth.index') }}">Back to home</a>
+    </p>
+  </div>
+{% endblock %}

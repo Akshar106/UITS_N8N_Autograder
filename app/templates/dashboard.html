@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Your courses - Autograder{% endblock %}
+{% block content %}
+  <h1>Your courses</h1>
+  {% if not courses %}
+    <p class="muted">No courses found where you're listed as an instructor.</p>
+  {% else %}
+    <table>
+      <thead><tr><th>Course</th><th>Term</th><th></th></tr></thead>
+      <tbody>
+        {% for course in courses %}
+          <tr>
+            <td>{{ course.name }}</td>
+            <td>{{ course.term.name if course.term else '' }}</td>
+            <td><a class="btn" href="{{ url_for('dashboard.assignments', course_id=course.id) }}">View assignments</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}

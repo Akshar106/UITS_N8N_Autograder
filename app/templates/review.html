@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}Review - {{ assignment_name }}{% endblock %}
+{% block body_class %}wide{% endblock %}
+{% block head_extra %}
+  {% if job and job.status == 'running' and not job_stale %}<meta http-equiv="refresh" content="3">{% endif %}
+{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('dashboard.courses') }}">&larr; Back to courses</a></p>
+  <h1>Review: {{ assignment_name }}</h1>
+
+  {% if job and job.status == 'running' and job_stale %}
+    <div class="flash flash-error">
+      Grading appears to have stopped unexpectedly &mdash; no progress for over
+      {{ (stale_after / 60)|round|int }} minutes, which usually means the server restarted partway through.
+      It stopped at {{ job.done }} of {{ job.total }} submissions{% if job.message %}, while {{ job.message[0]|lower }}{{ job.message[1:] }}{% endif %}.
+      <a href="{{ url_for('rubric.upload_rubric', course_id=course_id, assignment_id=assignment_id) }}">Go back and click "Grade all submissions" again</a>
+      &mdash; pages already read are kept, so it resumes rather than starting over.
+    </div>
+  {% elif job and job.status == 'running' %}
+    <div class="flash flash-success">
+      Grading in progress: {{ job.done }} of {{ job.total }} submissions done.{% if job.message %}
+      <br><strong>{{ job.message }}</strong>{% endif %}
+      This page refreshes automatically every few seconds. Reading a handwritten
+      submission takes a few minutes, so a single row can sit here a while.
+    </div>
+  {% elif job and job.status == 'error' %}
+    <div class="flash flash-error">
+      Grading stopped early due to an unexpected error: {{ job.message }}. Submissions graded before the error are below; you can re-run grading to retry the rest.
+    </div>
+  {% endif %}
+
+  {% if total_mismatch %}
+    <div class="flash flash-error">
+      Heads up: Canvas has this assignment configured for {{ total_mismatch.expected }} points, but the AI computed
+      a different total ({{ total_mismatch.found | join(', ') }}) for at least one submission. Double-check the
+      uploaded rubric before entering any of these grades in Canvas.
+    </div>
+  {% endif %}
+
+  {% if stale_reviews %}
+    <div class="flash flash-error">
+      {{ stale_reviews }} row{{ 's' if stale_reviews != 1 }} need{{ '' if stale_reviews != 1 else 's' }}
+      re-checking: the submission was replaced, or the rubric changed, after you approved a grade.
+      Your earlier score and comments are still in the row, but the approval was withdrawn so a
+      grade for work you did not review cannot reach the export. Re-check and save each one.
+    </div>
+  {% endif %}
+
+  <p class="muted">AI-suggested grades below are drafts only. Edit or approve each row, then export the approved grades to Excel for entry into Canvas.</p>
+
+  {% if submissions %}
+    <p class="muted">
+      {{ approved_count }} of {{ submissions | length }} approved.
+      {% if needs_attention %}
+        <strong>{{ needs_attention }}</strong> need a closer look &mdash; those are listed first.
+      {% endif %}
+      &middot;
+      {% if sort == 'attention' %}
+        Sorted by what needs attention &middot;
+        <a href="{{ url_for('review.review_queue', course_id=course_id, assignment_id=assignment_id, sort='name') }}">sort by name</a>
+      {% else %}
+        Sorted by name &middot;
+        <a href="{{ url_for('review.review_queue', course_id=course_id, assignment_id=assignment_id) }}">sort by what needs attention</a>
+      {% endif %}
+    </p>
+  {% endif %}
+
+  <p><a class="btn" href="{{ url_for('export.export_grades', course_id=course_id, assignment_id=assignment_id) }}">Export to Excel</a></p>
+
+  {% if not submissions %}
+    <p class="muted">No graded submissions yet. Run grading from the assignment page first.</p>
+  {% else %}
+    <div class="table-scroll">
+    <table class="review-table">
+      <colgroup>
+        <col class="c-student"><col class="c-ai-score"><col class="c-ai-fb">
+        <col class="c-score"><col class="c-final-fb"><col class="c-approved"><col class="c-actions">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th>AI Score</th>
+          <th>AI Feedback</th>
+          <th>Final Score</th>
+          <th>Final Feedback</th>
+          <th>Approved</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in submissions %}
+          {% set form_id = "review-form-" ~ s.id %}
+          <tr>
+            <td>
+              {{ s.student_name }}<br><span class="muted">{{ s.student_id }}</span>
+              {% if s.submission_attempt %}<br><span class="muted">Attempt {{ s.submission_attempt }}</span>{% endif %}
+            </td>
+            <td>
+              {# Score first: it is what the column is for. The notice explains it, so it reads underneath. #}
+              {% if s.ai_error %}
+                <span class="note note-error">{{ s.ai_error }}</span>
+              {% else %}
+                <span class="score">{{ s.ai_score }} / {{ s.ai_total }}</span>
+              {% endif %}
+              {% if s.ai_confidence and not s.ai_error %}
+                <span class="badge badge-{{ s.ai_confidence }}">{{ s.ai_confidence }} confidence</span>
+              {% endif %}
+              {% if s.review_stale %}
+                <span class="note note-error">Resubmitted or re-scoped since you approved this &mdash; please re-check.</span>
+              {% endif %}
+              {% if s.from_ocr %}
+                {# Not the same kind of warning as a partial read. The grade
+                   rests on a machine's reading of handwriting, and the quote
+                   check cannot catch a misreading because it verifies the
+                   quote against that same reading. #}
+                <span class="note note-error">
+                  Read from handwriting or a scan by machine transcription. The evidence
+                  quotes were checked against the transcript, not against the page, so a
+                  misreading would not have been caught &mdash; compare with the original
+                  in Canvas before approving.
+                </span>
+              {% endif %}
+              {% if s.notes %}
+                {# How well the file was read, not what the answer was worth. A
+                   grade computed from half a document should never look as solid
+                   as one computed from all of it. #}
+                <span class="note note-warn">
+                  {% for note in s.notes %}{{ note }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+                </span>
+              {% endif %}
+              {% if s.ai_disagreement %}
+                <span class="note note-warn">
+                  Two independent gradings disagreed by up to
+                  {{ s.ai_disagreement }} point{{ 's' if s.ai_disagreement != 1 }} on this
+                  submission. The score shown is their midpoint.
+                </span>
+              {% endif %}
+              {% if s.knowledge_judgments %}
+                {# Not a warning -- a pointer. These marks rest on the grader's
+                   subject knowledge because the rubric did not set a standard,
+                   so the faculty member is checking expertise rather than their
+                   own criteria. #}
+                <span class="note note-info">
+                  {{ s.knowledge_judgments }} mark{{ 's' if s.knowledge_judgments != 1 }}
+                  judged on subject knowledge, not your rubric.
+                </span>
+              {% endif %}
+              {% if s.unverified_quotes %}
+                <span class="note note-error">
+                  {{ s.unverified_quotes }} quote{{ 's' if s.unverified_quotes != 1 }} could not be
+                  found in this submission &mdash; check those awards carefully.
+                </span>
+              {% endif %}
+            </td>
+            <td>
+              {{ s.ai_feedback or '' }}
+              {% if s.breakdown %}
+                <details>
+                  <summary>Per-question breakdown</summary>
+                  <ul>
+                    {% for q in s.breakdown %}
+                      <li>
+                        <strong>{{ q.question }}</strong> — {{ q.awarded_points }}/{{ q.max_points }}
+                        {% if q.confidence and q.confidence != 'high' %}
+                          <span class="badge badge-{{ q.confidence }}">{{ q.confidence }}</span>
+                        {% endif %}
+                        {% if q.disagreement %}
+                          {# Red only when the gap is big enough to change the
+                             grade; a point of wobble on a twenty point question
+                             is worth seeing but not worth alarm. #}
+                          <span class="badge badge-{{ 'low' if q.disagreement_material else 'info' }}">passes differ by {{ q.disagreement }}</span>
+                        {% endif %}
+                        {% if q.get('snapped_from') is not none %}
+                          {# The faculty member set this criterion to Full Marks
+                             or No Marks. Saying the award was moved onto that
+                             scale is more honest than showing a clean number
+                             that was not what the grader actually judged. #}
+                          <span class="badge badge-info">judged {{ q.snapped_from }}, rounded to the rubric's all-or-nothing scale</span>
+                        {% endif %}
+                        {% if q.basis in ('knowledge', 'both') %}
+                          <span class="badge badge-info">{{ 'own knowledge' if q.basis == 'knowledge' else 'rubric + knowledge' }}</span>
+                        {% endif %}
+                        <br>{{ q.comment }}
+                        {#
+                          The quote is what makes this checkable in seconds instead of
+                          re-reading the whole answer -- and a quote the app could not
+                          find in the submission is the one place a fabricated award
+                          becomes visible.
+                        #}
+                        {% if q.evidence %}
+                          <br>
+                          {% if q.evidence_verified is false %}
+                            <span class="note note-error">Not found in the submission: &ldquo;{{ q.evidence }}&rdquo;</span>
+                          {% else %}
+                            <span class="quote">&ldquo;{{ q.evidence }}&rdquo;</span>
+                          {% endif %}
+                        {% endif %}
+                        {% if q.missing %}
+                          <br><span class="muted">Missing: {{ q.missing }}</span>
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </details>
+              {% endif %}
+            </td>
+            {#
+              A stale row's stored review describes work that is no longer there,
+              so it must not sit in the input one careless click from being
+              re-approved. It is shown read-only instead, and the boxes start from
+              the fresh AI result -- keeping the earlier review visible without
+              making it the default answer.
+            #}
+            {% if s.review_stale %}
+              {% set score_prefill = s.ai_score if s.ai_score is not none else '' %}
+              {% set feedback_prefill = s.ai_feedback or '' %}
+            {% else %}
+              {% set score_prefill = s.faculty_score if s.faculty_score is not none else (s.ai_score if s.ai_score is not none else '') %}
+              {% set feedback_prefill = s.faculty_feedback or s.ai_feedback or '' %}
+            {% endif %}
+            <td>
+              {% if s.review_stale and s.faculty_score is not none %}
+                <p class="muted">Earlier review<br><span class="score">{{ s.faculty_score }}</span></p>
+              {% endif %}
+              <input form="{{ form_id }}" type="number" step="0.1" name="faculty_score" value="{{ score_prefill }}">
+            </td>
+            <td>
+              {% if s.review_stale and s.faculty_feedback %}
+                <details>
+                  <summary class="muted">Your earlier comments</summary>
+                  <p class="muted">{{ s.faculty_feedback }}</p>
+                </details>
+              {% endif %}
+              <textarea form="{{ form_id }}" name="faculty_feedback">{{ feedback_prefill }}</textarea>
+            </td>
+            <td><input form="{{ form_id }}" type="checkbox" name="approved" {{ 'checked' if s.approved }}></td>
+            <td>
+              <form id="{{ form_id }}" method="post" action="{{ url_for('review.save_review', course_id=course_id, assignment_id=assignment_id, submission_id=s.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              </form>
+              <button class="btn" type="submit" form="{{ form_id }}">Save</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  {% endif %}
+{% endblock %}

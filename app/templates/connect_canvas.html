@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Connect Canvas - Autograder{% endblock %}
+{% block content %}
+  <div class="card">
+    <h1>Connect your Canvas account</h1>
+    {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+    {% if already_connected %}
+      <p>Your Canvas account is connected.</p>
+      <a class="btn" href="{{ url_for('dashboard.courses') }}">Go to your courses</a>
+    {% else %}
+      <p class="muted">
+        You're signed in with IU. One more step: authorize this app to read your Canvas
+        courses and assignment submissions. You'll be redirected to Canvas to approve —
+        the app only receives read access matching your own Canvas role.
+      </p>
+      <a class="btn" href="{{ url_for('auth.canvas_connect') }}">Connect Canvas</a>
+    {% endif %}
+  </div>
+{% endblock %}

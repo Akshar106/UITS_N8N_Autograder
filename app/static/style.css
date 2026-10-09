@@ -1,0 +1,158 @@
+:root {
+  color-scheme: light dark;
+  --border: #d9d9d9;
+  --muted: #666;
+  --accent: #1f3864;
+}
+
+body {
+  font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  max-width: 1100px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.5;
+}
+
+/* The review queue puts seven columns of prose and form fields side by side;
+   1100px squeezes them until the text wraps a word or two per line. */
+body.wide { max-width: 1500px; }
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1rem;
+}
+
+header a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--accent);
+  color: white;
+}
+
+.muted { color: var(--muted); font-size: 0.9em; }
+
+.flash { padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+.flash-success { background: #e6f4ea; color: #1e4620; }
+.flash-error { background: #fce8e6; color: #611a15; }
+
+/* In-cell notice. A .flash inside a table cell was the cause of the overlapping
+   text: it is a span, so its vertical padding spilled out of the line box and
+   printed on top of the score beneath it. This is a block with tight spacing
+   that stacks properly against its neighbours. */
+.note {
+  display: block;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  margin: 0.4rem 0 0;
+  font-size: 0.85em;
+  line-height: 1.35;
+}
+.note:first-child { margin-top: 0; }
+.note-error { background: #fce8e6; color: #611a15; }
+/* Amber, not red: the grade is usable but the file was not read completely. */
+.note-warn  { background: #fef7e0; color: #5c4400; }
+.note-info  { background: #e3ecf7; color: #1f3864; }
+
+/* Confidence badge. Only medium/low are shown per question -- "high" on every
+   row of a 200-row table is noise, so its absence carries the meaning. */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.78em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.badge-high   { background: #e6f4ea; color: #1e4620; }
+.badge-medium { background: #fef7e0; color: #5c4400; }
+.badge-low    { background: #fce8e6; color: #611a15; }
+/* Informational, not a problem: blue rather than amber or red. */
+.badge-info   { background: #e3ecf7; color: #1f3864; }
+
+/* The student's own words, so they read as a quotation and not as the app's
+   own prose. */
+.quote {
+  display: block;
+  border-left: 3px solid var(--border);
+  padding: 0.15rem 0 0.15rem 0.5rem;
+  margin: 0.25rem 0;
+  font-style: italic;
+  opacity: 0.85;
+}
+
+/* Review queue: give each column a share of the width so the two prose columns
+   get the room and the narrow ones stop wrapping mid-word. */
+.review-table { table-layout: fixed; }
+.review-table col.c-student   { width: 10%; }
+.review-table col.c-ai-score  { width: 12%; }
+.review-table col.c-ai-fb     { width: 28%; }
+.review-table col.c-score     { width: 9%; }
+.review-table col.c-final-fb  { width: 26%; }
+.review-table col.c-approved  { width: 7%; }
+.review-table col.c-actions   { width: 8%; }
+.review-table td { word-wrap: break-word; overflow-wrap: break-word; }
+.review-table .score { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.review-table ul { padding-left: 1.1rem; margin: 0.5rem 0 0; }
+.review-table li { margin-bottom: 0.5rem; }
+.review-table textarea { min-height: 7em; }
+.review-table details > summary { cursor: pointer; }
+
+.btn {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 0.95em;
+}
+
+.btn:hover { opacity: 0.9; }
+
+input[type="text"], input[type="number"], textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+}
+
+textarea { min-height: 4em; }
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.5rem;
+  margin-bottom: 1rem;
+}
+
+/* Below the width the seven columns need, scroll the table instead of letting
+   it crush every column or push the page sideways. */
+.table-scroll { overflow-x: auto; }
+.table-scroll .review-table { min-width: 1100px; }
